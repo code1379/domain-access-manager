@@ -150,7 +150,7 @@ async function getPanelNode(env, nodeId) {
 }
 function isIPv4(value) {
   const parts = String(value || "").split(".");
-  return parts.length === 4 && parts.every(p => /^\\d{1,3}$/.test(p) && Number(p) >= 0 && Number(p) <= 255);
+  return parts.length === 4 && parts.every(p => /^\d{1,3}$/.test(p) && Number(p) >= 0 && Number(p) <= 255);
 }
 function normalizeHostname(value, zoneName) {
   const hostname = String(value || "").trim().toLowerCase().replace(/\.$/, "");
