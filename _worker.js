@@ -111,6 +111,15 @@ async function discoverZones(token) {
   }
   return zones;
 }
+async function getTunnelAccountContext(env, credentialId) {
+  const row = await env.DOMAIN_DB.prepare("SELECT id,name,account_id,token_ciphertext,zones_json FROM cloudflare_credentials WHERE id=?").bind(credentialId).first();
+  if (!row) throw new Error("Cloudflare 凭据不存在");
+  const accountId = String(row.account_id || "").trim().toLowerCase();
+  if (!/^[0-9a-f]{32}$/.test(accountId)) throw new Error("该凭据缺少有效 Account ID");
+  const zones = JSON.parse(row.zones_json || "[]");
+  const token = await decryptSecret(env, row.token_ciphertext);
+  return { row, zones, token, accountId };
+}
 async function getTunnelContext(env, credentialId, zoneId) {
   const row = await env.DOMAIN_DB.prepare("SELECT id,name,account_id,token_ciphertext,zones_json FROM cloudflare_credentials WHERE id=?").bind(credentialId).first();
   if (!row) throw new Error("Cloudflare 凭据不存在");
@@ -888,8 +897,7 @@ async function api(request, env, path) {
     const tunnelId = tunnelRoute[1];
     const action = tunnelRoute[2] || "";
     const credentialId = String(body.credentialId || new URL(request.url).searchParams.get("credentialId") || "");
-    const zoneId = String(body.zoneId || new URL(request.url).searchParams.get("zoneId") || "");
-    const ctx = await getTunnelContext(env,credentialId,zoneId);
+    const ctx = await getTunnelAccountContext(env,credentialId);
     const base = tunnelApiPath(ctx.accountId,tunnelId);
     if (action === "detail" && request.method === "GET") {
       const [tunnel,config] = await Promise.all([tunnelRequest(ctx.token,base),getTunnelConfiguration(ctx.token,ctx.accountId,tunnelId)]);
@@ -904,7 +912,10 @@ async function api(request, env, path) {
       const operation=String(body.action||"add");
       if(operation==="add"){
         const service=normalizeTunnelService(body.service);
-        const hostname=normalizeTunnelHostname(body.sub,ctx.zone.name);
+        const zoneId=String(body.zoneId||"");
+        const zone=ctx.zones.find(z=>z.id===zoneId);
+        if(!zone)return json({error:"请选择属于当前 Cloudflare 账户的 Zone"},400);
+        const hostname=normalizeTunnelHostname(body.sub,zone.name);
         const rulePath=String(body.path||"").trim();
         if(rulePath && (!rulePath.startsWith("/") || rulePath.length>200))return json({error:"路径必须以 / 开头且不超过 200 个字符"},400);
         if(ingress.some(r=>r.hostname===hostname&&(r.path||"")===rulePath))return json({error:"该域名和路径规则已存在"},409);
