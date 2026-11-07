@@ -448,7 +448,7 @@ async function api(request, env, path) {
         if(matched?.id) throw new Error("1Panel 已存在同名网站（ID "+matched.id+"），为避免接管或覆盖，本工具停止自动创建");
         const taskId=randomId();
         await panelRequest(node.base_url,apiKey,"POST","/websites",{
-          type:"proxy",alias,remark:"Created by Domain Access Manager",proxy:site.upstream_url,webSiteGroupID:Number(group.id),IPV6:false,
+          type:"proxy",appType:"installed",alias,remark:"Created by Domain Access Manager",proxy:site.upstream_url,webSiteGroupID:Number(group.id),IPV6:false,
           domains:[{domain:site.hostname,port:80,ssl:false}],enableSSL:true,websiteSSLID:Number(meta.sslId),taskID:taskId
         });
         const created=await panelPageItems(node.base_url,apiKey,"/websites/search",{page:1,pageSize:100,orderBy:"created_at",order:"descending"});
