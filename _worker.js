@@ -246,7 +246,8 @@ async function api(request, env, path) {
     const zone = JSON.parse(row.zones_json || "[]").find(z => z.id === zoneId);
     if (!zone) return json({ error: "该 Zone 不在此 Token 的授权范围内" }, 403);
     const token = await decryptSecret(env, row.token_ciphertext);
-    const record = await cfRequest(token, "/zones/" + encodeURIComponent(zoneId) + "/dns_records", "POST", { type,name,content,ttl,proxied: type === "TXT" ? false : proxied });
+    const normalizedName = name === "@" ? zone.name : (name === zone.name || name.endsWith("." + zone.name) ? name : name + "." + zone.name);
+    const record = await cfRequest(token, "/zones/" + encodeURIComponent(zoneId) + "/dns_records", "POST", { type,name:normalizedName,content,ttl:proxied ? 1 : ttl,proxied: type === "TXT" ? false : proxied });
     await log(env, "dns.create", "dns_record", record.id, "success", "DNS 记录已创建", {zone:zone.name,type,name});
     return json({ ok:true, item:{id:record.id,type:record.type,name:record.name,content:record.content,ttl:record.ttl,proxied:record.proxied} });
   }
