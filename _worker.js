@@ -846,11 +846,22 @@ async function api(request, env, path) {
   }
   if (path === "/api/tunnels" && request.method === "GET") {
     const credentialId = String(new URL(request.url).searchParams.get("credentialId") || "");
-    const zoneId = String(new URL(request.url).searchParams.get("zoneId") || "");
-    if (!credentialId || !zoneId) return json({ error: "请选择 Cloudflare 凭据和 Zone" }, 400);
-    const ctx = await getTunnelContext(env, credentialId, zoneId);
-    const items = await listAccountTunnels(ctx.token, ctx.accountId);
-    return json({ items: items.map(t => ({ id:t.id,name:t.name,status:t.status,createdAt:t.created_at,deletedAt:t.deleted_at,connections:t.connections||[],hostname:t.hostname||"" })), accountId:ctx.accountId, zone:ctx.zone.name });
+    if (!credentialId) return json({ error: "请选择 Cloudflare 账户" }, 400);
+    const row = await env.DOMAIN_DB.prepare("SELECT id,name,account_id,token_ciphertext,zones_json FROM cloudflare_credentials WHERE id=?").bind(credentialId).first();
+    if (!row) return json({ error: "Cloudflare 凭据不存在" }, 404);
+    const accountId = String(row.account_id || "").trim().toLowerCase();
+    if (!/^[0-9a-f]{32}$/.test(accountId)) return json({ error: "该凭据缺少有效 Account ID" }, 400);
+    const token = await decryptSecret(env, row.token_ciphertext);
+    const tunnels = await listAccountTunnels(token, accountId);
+    const items = await Promise.all(tunnels.map(async t => {
+      let ingress = [];
+      let configError = "";
+      try { ingress = (await getTunnelConfiguration(token, accountId, t.id)).ingress; }
+      catch (error) { configError = error?.message || String(error); }
+      const routes = ingress.filter(x => x.hostname).map(x => ({ hostname:x.hostname, path:x.path || "", service:x.service || "" }));
+      return { id:t.id,name:t.name,status:t.status,createdAt:t.created_at,connections:t.connections||[],routes,routeCount:routes.length,configError };
+    }));
+    return json({ items, accountId, accountName:row.name, zones:JSON.parse(row.zones_json || "[]") });
   }
   if (path === "/api/tunnels" && request.method === "POST") {
     const credentialId = String(body.credentialId || "");
