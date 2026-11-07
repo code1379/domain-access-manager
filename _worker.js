@@ -421,7 +421,13 @@ async function api(request, env, path) {
     if(!site) return json({error:"域名任务不存在"},404);
     const meta=JSON.parse(site.metadata_json||"{}");
     if(site.status==="ready") return json({ok:true,item:{id,hostname:site.hostname,status:site.status,websiteId:meta.websiteId,sslId:site.ssl_id}});
-    if(site.status==="failed") return json({ok:false,item:{id,hostname:site.hostname,status:site.status,error:site.last_error}});
+    if(site.status==="failed" && !meta.sslId) return json({ok:false,item:{id,hostname:site.hostname,status:site.status,error:site.last_error}});
+    if(site.status==="failed" && meta.sslId) {
+      meta.stage="certificate_pending";
+      delete meta.error;
+      await env.DOMAIN_DB.prepare("UPDATE managed_sites SET status='certificate_pending',last_error=NULL,metadata_json=?,updated_at=? WHERE id=?")
+        .bind(JSON.stringify(meta),new Date().toISOString(),id).run();
+    }
     const {node,apiKey}=await getPanelNode(env,site.panel_node_id);
     try {
       if(!meta.sslId) throw new Error("证书任务缺少 1Panel SSL ID");
@@ -610,7 +616,7 @@ function updatePublishZones(){
  $("#publishZone").innerHTML=(item?.zones||[]).map(z=>'<option value="'+esc(z.id)+'">'+esc(z.name)+'</option>').join("");
 }
 async function loadPublishList(){
- try{const d=await api("/api/publish");$("#publishList").innerHTML=d.items.length?d.items.map(x=>'<div class="item"><div class="row"><b>'+esc(x.hostname)+'</b><span class="pill '+(x.status==="ready"?"":x.status==="failed"?"bad":"")+'">'+esc(x.status)+'</span></div><small>'+esc(x.lastError||x.metadata?.stage||"")+' · '+esc(x.updatedAt)+'</small><div class="actions" style="margin-top:8px">'+(x.status==="certificate_pending"||x.status==="provisioning"?'<button data-progress="'+esc(x.id)+'">检查进度</button>':'')+'</div></div>').join(""):'<div class="empty">尚未接入域名</div>';document.querySelectorAll("[data-progress]").forEach(b=>b.onclick=()=>checkPublishProgress(b.dataset.progress,true))}catch(e){$("#publishList").textContent=e.message}
+ try{const d=await api("/api/publish");$("#publishList").innerHTML=d.items.length?d.items.map(x=>'<div class="item"><div class="row"><b>'+esc(x.hostname)+'</b><span class="pill '+(x.status==="ready"?"":x.status==="failed"?"bad":"")+'">'+esc(x.status)+'</span></div><small>'+esc(x.lastError||x.metadata?.stage||"")+' · '+esc(x.updatedAt)+'</small><div class="actions" style="margin-top:8px">'+(x.status==="certificate_pending"||x.status==="provisioning"?'<button data-progress="'+esc(x.id)+'">检查进度</button>':x.status==="failed"&&x.metadata?.sslId?'<button data-progress="'+esc(x.id)+'">重试后续步骤</button>':'')+'</div></div>').join(""):'<div class="empty">尚未接入域名</div>';document.querySelectorAll("[data-progress]").forEach(b=>b.onclick=()=>checkPublishProgress(b.dataset.progress,true))}catch(e){$("#publishList").textContent=e.message}
 }
 async function checkPublishProgress(id,showMessage){
  try{const d=await api("/api/publish/"+id+"/progress",{method:"POST",body:"{}"});const item=d.item||{};if(showMessage)msg($("#publishMsg"),item.status==="ready"?"域名接入完成："+item.hostname:(item.message||"当前状态："+item.status));await loadPublishList();return item}catch(e){if(showMessage)msg($("#publishMsg"),e.message,true);await loadPublishList();return {status:"failed",error:e.message}}
