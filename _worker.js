@@ -504,6 +504,25 @@ async function api(request, env, path) {
     await log(env, "dns.create", "dns_record", record.id, "success", "DNS 记录已创建", {zone:zone.name,type,name});
     return json({ ok:true, item:{id:record.id,type:record.type,name:record.name,content:record.content,ttl:record.ttl,proxied:record.proxied} });
   }
+  const dnsProxy = path.match(/^\/api\/dns\/records\/([0-9a-f-]+)\/proxy$/);
+  if (dnsProxy && request.method === "PATCH") {
+    const credentialId = String(body.credentialId || "");
+    const zoneId = String(body.zoneId || "");
+    if (typeof body.proxied !== "boolean") return json({ error: "代理状态必须是 true 或 false" }, 400);
+    const row = await env.DOMAIN_DB.prepare("SELECT token_ciphertext,zones_json FROM cloudflare_credentials WHERE id=?").bind(credentialId).first();
+    if (!row) return json({ error: "Cloudflare 凭据不存在" }, 404);
+    const zone = JSON.parse(row.zones_json || "[]").find(z => z.id === zoneId);
+    if (!zone) return json({ error: "该 Zone 不在此 Token 的授权范围内" }, 403);
+    const token = await decryptSecret(env, row.token_ciphertext);
+    const recordPath = "/zones/" + encodeURIComponent(zoneId) + "/dns_records/" + encodeURIComponent(dnsProxy[1]);
+    const current = await cfRequest(token, recordPath);
+    if (!current || !current.id) return json({ error: "DNS 记录不存在" }, 404);
+    if (!["A", "AAAA", "CNAME"].includes(String(current.type || "").toUpperCase())) return json({ error: "Cloudflare 代理仅支持 A、AAAA 和 CNAME 记录" }, 400);
+    if (Boolean(current.proxied) !== body.proxied) await cfRequest(token, recordPath, "PATCH", { proxied: body.proxied });
+    const updated = await cfRequest(token, recordPath);
+    await log(env, "dns.proxy", "dns_record", updated.id, "success", body.proxied ? "Cloudflare 橙色云代理已开启" : "Cloudflare 代理已关闭", { zone: zone.name, name: updated.name, proxied: updated.proxied });
+    return json({ ok: true, item: { id: updated.id, type: updated.type, name: updated.name, content: updated.content, ttl: updated.ttl, proxied: updated.proxied } });
+  }
   const dnsDelete = path.match(/^\/api\/dns\/records\/([0-9a-f-]+)$/);
   if (dnsDelete && request.method === "DELETE") {
     const credentialId = String(body.credentialId || "");
@@ -538,7 +557,7 @@ const PAGE = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Domain Access Manager</title>
 <style>
 :root{color-scheme:dark;--bg:#0b1020;--panel:#121a2b;--panel2:#182338;--line:#26344b;--text:#edf3ff;--muted:#93a4bd;--accent:#6aa7ff;--green:#45c58a;--red:#ff7777}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button,input{font:inherit}button{cursor:pointer;border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:9px;padding:9px 13px}button.primary{background:#2767c8;border-color:#3478dc}button.danger{color:#ff9999}input{width:100%;padding:11px 12px;background:#0c1424;border:1px solid var(--line);border-radius:9px;color:var(--text);outline:none}input:focus{border-color:var(--accent)}.wrap{max-width:1120px;margin:auto;padding:28px 22px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}.brand{font-size:19px;font-weight:700}.muted{color:var(--muted)}.tabs{display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap}.tabs button.active{background:#1e3d68;border-color:#477fc8}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:15px}.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px}.card h3{margin:0 0 14px;font-size:16px}.field{margin:12px 0}.field label{display:block;margin-bottom:6px;color:var(--muted);font-size:12px}.actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.item{padding:14px 0;border-top:1px solid var(--line)}.item:first-child{border-top:0}.row{display:flex;justify-content:space-between;gap:12px;align-items:center}.pill{font-size:11px;color:var(--green);background:#16382e;padding:3px 8px;border-radius:20px}.pill.bad{color:#ff9d9d;background:#3a2228}.zone{display:inline-block;border:1px solid var(--line);border-radius:20px;padding:3px 8px;margin:5px 4px 0 0;font-size:11px;color:var(--muted)}.hidden{display:none!important}.notice{padding:10px 12px;border-radius:9px;background:#1a2b43;color:#a9caff;margin:12px 0}.error{background:#3b2027;color:#ffaaaa}.login{max-width:390px;margin:12vh auto;padding:26px}.login h1{margin:0 0 5px}.empty{padding:22px;text-align:center;color:var(--muted)}small{color:var(--muted)}@media(max-width:600px){.wrap{padding:18px 13px}.top{align-items:flex-start}.row{align-items:flex-start}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button,input{font:inherit}button{cursor:pointer;border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:9px;padding:9px 13px}button.primary{background:#2767c8;border-color:#3478dc}button.danger{color:#ff9999}input{width:100%;padding:11px 12px;background:#0c1424;border:1px solid var(--line);border-radius:9px;color:var(--text);outline:none}input:focus{border-color:var(--accent)}.wrap{max-width:1120px;margin:auto;padding:28px 22px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}.brand{font-size:19px;font-weight:700}.muted{color:var(--muted)}.tabs{display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap}.tabs button.active{background:#1e3d68;border-color:#477fc8}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:15px}.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px}.card h3{margin:0 0 14px;font-size:16px}.field{margin:12px 0}.field label{display:block;margin-bottom:6px;color:var(--muted);font-size:12px}.actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.dns-toggle{width:42px;height:24px;padding:2px;border-radius:20px;background:#3b4659;border:1px solid #52617a;display:inline-flex;align-items:center;justify-content:flex-start;transition:background .15s,border-color .15s;vertical-align:middle}.dns-toggle span{width:18px;height:18px;background:#e9eef7;border-radius:50%;display:block;transition:transform .15s}.dns-toggle[aria-checked="true"]{background:#e78a20;border-color:#f5a33c}.dns-toggle[aria-checked="true"] span{transform:translateX(18px)}.dns-toggle:disabled{opacity:.5;cursor:not-allowed}.proxy-state{font-size:11px;color:var(--muted)}.proxy-state.on{color:#ffb34d}.item{padding:14px 0;border-top:1px solid var(--line)}.item:first-child{border-top:0}.row{display:flex;justify-content:space-between;gap:12px;align-items:center}.pill{font-size:11px;color:var(--green);background:#16382e;padding:3px 8px;border-radius:20px}.pill.bad{color:#ff9d9d;background:#3a2228}.zone{display:inline-block;border:1px solid var(--line);border-radius:20px;padding:3px 8px;margin:5px 4px 0 0;font-size:11px;color:var(--muted)}.hidden{display:none!important}.notice{padding:10px 12px;border-radius:9px;background:#1a2b43;color:#a9caff;margin:12px 0}.error{background:#3b2027;color:#ffaaaa}.login{max-width:390px;margin:12vh auto;padding:26px}.login h1{margin:0 0 5px}.empty{padding:22px;text-align:center;color:var(--muted)}small{color:var(--muted)}@media(max-width:600px){.wrap{padding:18px 13px}.top{align-items:flex-start}.row{align-items:flex-start}}
 </style></head><body><div id="login" class="card login"><h1>Domain Access Manager</h1><p class="muted">Cloudflare DNS · 1Panel · Reverse Proxy</p><form id="loginForm"><div class="field"><label>管理员密码</label><input name="password" type="password" required autofocus autocomplete="current-password"></div><button class="primary" style="width:100%">登录</button></form><div id="loginMsg"></div></div>
 <div id="app" class="wrap hidden"><header class="top"><div><div class="brand">Domain Access Manager</div><small>Cloudflare DNS & 1Panel 管理</small></div><button id="logout">退出登录</button></header>
 <nav class="tabs"><button data-tab="overview" class="active">概览</button><button data-tab="cloudflare">Cloudflare</button><button data-tab="nodes">VPS / 1Panel</button><button data-tab="dns">DNS 记录</button><button data-tab="publish">域名接入</button><button data-tab="logs">操作记录</button></nav>
@@ -599,7 +618,37 @@ async function loadCf(){try{const d=await api("/api/cloudflare");window.__cfItem
 async function loadNodes(){try{const d=await api("/api/nodes");$("#countNodes").textContent=d.items.length+" 台 VPS";$("#nodeList").innerHTML=d.items.length?d.items.map(x=>'<div class="item"><div class="row"><b>'+esc(x.name)+'</b><span class="pill">'+esc(x.connection_status)+'</span></div><small>'+esc(x.base_url)+(x.panel_version?' · '+esc(x.panel_version):'')+'</small><div class="actions" style="margin-top:8px"><button class="danger" data-del-node="'+esc(x.id)+'">删除</button></div></div>').join(""):'<div class="empty">尚未添加 1Panel 节点</div>';document.querySelectorAll("[data-del-node]").forEach(b=>b.onclick=async()=>{if(confirm("确定删除该节点？")){try{await api("/api/nodes/"+b.dataset.delNode,{method:"DELETE"});loadNodes()}catch(e){alert(e.message)}}})}catch(e){$("#nodeList").textContent=e.message}}
 async function loadDnsCredentials(){const d=await api("/api/cloudflare");window.__cfItems=d.items;const sel=$("#dnsCredential");sel.innerHTML=d.items.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.name)+'</option>').join("");updateDnsZones();sel.onchange=updateDnsZones}
 function updateDnsZones(){const d=$("#dnsCredential").selectedOptions[0];const cfListCache=window.__cfItems||[];const item=cfListCache.find(x=>x.id===d?.value);$("#dnsZone").innerHTML=(item?.zones||[]).map(z=>'<option value="'+esc(z.id)+'">'+esc(z.name)+'</option>').join("")}
-async function loadDns(){try{const cred=$("#dnsCredential").value,zone=$("#dnsZone").value;if(!cred||!zone)throw new Error("请先添加 Cloudflare 凭据并选择域名");const d=await api("/api/dns/records?credentialId="+encodeURIComponent(cred)+"&zoneId="+encodeURIComponent(zone));$("#dnsList").innerHTML=d.items.length?d.items.map(x=>'<div class="item"><div class="row"><b>'+esc(x.name)+'</b><button class="danger" data-dns-del="'+esc(x.id)+'">删除</button></div><small>'+esc(x.type)+' · '+esc(x.content)+' · TTL '+esc(x.ttl)+(x.proxied?' · 代理开启':'')+'</small></div>').join(""):'<div class="empty">该域名暂无 DNS 记录</div>';document.querySelectorAll("[data-dns-del]").forEach(b=>b.onclick=async()=>{if(confirm("确定删除这条 DNS 记录？")){try{await api("/api/dns/records/"+b.dataset.dnsDel,{method:"DELETE",body:JSON.stringify({credentialId:cred,zoneId:zone})});await loadDns()}catch(e){alert(e.message)}}})}catch(e){msg($("#dnsMsg"),e.message,true)}}
+async function loadDns(){
+ try{
+  const cred=$("#dnsCredential").value,zone=$("#dnsZone").value;
+  if(!cred||!zone)throw new Error("请先添加 Cloudflare 凭据并选择域名");
+  const d=await api("/api/dns/records?credentialId="+encodeURIComponent(cred)+"&zoneId="+encodeURIComponent(zone));
+  $("#dnsList").innerHTML=d.items.length?d.items.map(x=>{
+   const proxyable=["A","AAAA","CNAME"].includes(String(x.type).toUpperCase());
+   return '<div class="item"><div class="row"><b>'+esc(x.name)+'</b><div class="actions">'+
+    (proxyable?'<span class="proxy-state '+(x.proxied?'on':'')+'">'+(x.proxied?'橙色云':'仅 DNS')+'</span><button type="button" class="dns-toggle" role="switch" aria-checked="'+String(Boolean(x.proxied))+'" data-dns-proxy="'+esc(x.id)+'" title="'+(x.proxied?'关闭 Cloudflare 代理':'开启 Cloudflare 橙色云代理')+'"><span></span></button>':'<span class="proxy-state">此类型不支持代理</span>')+
+    '<button class="danger" data-dns-del="'+esc(x.id)+'">删除</button></div></div><small>'+esc(x.type)+' · '+esc(x.content)+' · TTL '+esc(x.ttl)+'</small></div>';
+  }).join(""):'<div class="empty">该域名暂无 DNS 记录</div>';
+  document.querySelectorAll("[data-dns-proxy]").forEach(b=>b.onclick=async()=>{
+   const desired=b.getAttribute("aria-checked")!=="true";
+   b.disabled=true;
+   try{
+    await api("/api/dns/records/"+b.dataset.dnsProxy+"/proxy",{method:"PATCH",body:JSON.stringify({credentialId:cred,zoneId:zone,proxied:desired})});
+    await loadDns();
+    msg($("#dnsMsg"),desired?"Cloudflare 橙色云代理已开启":"Cloudflare 代理已关闭，当前为仅 DNS");
+   }catch(e){
+    await loadDns();
+    msg($("#dnsMsg"),e.message,true);
+   }
+  });
+  document.querySelectorAll("[data-dns-del]").forEach(b=>b.onclick=async()=>{
+   if(confirm("确定删除这条 DNS 记录？")){
+    try{await api("/api/dns/records/"+b.dataset.dnsDel,{method:"DELETE",body:JSON.stringify({credentialId:cred,zoneId:zone})});await loadDns()}
+    catch(e){alert(e.message)}
+   }
+  });
+ }catch(e){msg($("#dnsMsg"),e.message,true)}
+}
 $("#loadDns").onclick=loadDns;
 $("#dnsForm").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{const zoneName=$("#dnsZone").selectedOptions[0]?.textContent||"";const recordName=String(f.get("name")||"").trim().toLowerCase();const type=String(f.get("type")||"").toUpperCase();const content=String(f.get("content")||"").trim();const d=await api("/api/dns/records",{method:"POST",body:JSON.stringify({credentialId:$("#dnsCredential").value,zoneId:$("#dnsZone").value,type,name:recordName,content,ttl:Number(f.get("ttl")||1),proxied:window.__pendingPanelDns?false:f.get("proxied")==="on"})});msg($("#dnsCreateMsg"),"DNS 记录已创建："+d.item.name);if(window.__pendingPanelDns&&type==="A"&&content===window.__pendingPanelDns.ip){const pending=window.__pendingPanelDns;const hostname=recordName==="@"?zoneName:(recordName===zoneName||recordName.endsWith("."+zoneName)?recordName:recordName+"."+zoneName);const address=pending.protocol+"//"+hostname+(pending.port?":"+pending.port:"")+pending.pathname;const done=document.createElement("div");done.className="notice";done.style.marginTop="10px";done.textContent="管理地址已生成："+address+"。DNS 不包含端口，端口已保留在管理地址中。";const back=document.createElement("button");back.type="button";back.className="primary";back.style.marginTop="10px";back.textContent="返回 VPS / 1Panel";back.onclick=()=>{activateTab("nodes");$("#nodeBaseUrl").value=address;$("#panelDnsAssist").classList.add("hidden");window.__pendingPanelDns=null;};done.appendChild(document.createElement("br"));done.appendChild(back);$("#dnsCreateMsg").appendChild(done);}e.target.reset();await loadDns()}catch(err){msg($("#dnsCreateMsg"),err.message,true)}};
 async function loadPublishOptions(){
