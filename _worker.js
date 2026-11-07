@@ -131,7 +131,7 @@ async function getTunnelContext(env, credentialId, zoneId) {
 function tunnelApiPath(accountId, tunnelId = "") {
   const base = "/accounts/" + encodeURIComponent(accountId) + "/cfd_tunnel";
   if (!tunnelId) return base;
-  if (!/^[0-9a-f-]{36}$/i.test(String(tunnelId))) throw new Error("Tunnel ID 格式无效");
+  if (!/^(?:[0-9a-f]{32}|[0-9a-f-]{36})$/i.test(String(tunnelId))) throw new Error("Tunnel ID 格式无效");
   return base + "/" + encodeURIComponent(tunnelId);
 }
 async function tunnelRequest(token, path, method = "GET", body) {
@@ -837,7 +837,7 @@ async function api(request, env, path) {
     await log(env,"tunnel.create","cloudflare_tunnel",tunnel.id,"success","Cloudflare Tunnel 已创建",{name,hostname,service,zone:ctx.zone.name});
     return json({ok:true,item:{id:tunnel.id,name,hostname,service,dnsCreated:dnsResult.created}});
   }
-  const tunnelRoute = path.match(/^\/api\/tunnels\/([0-9a-f-]{36})(?:\/(detail|token|routes))?$/i);
+  const tunnelRoute = path.match(/^\/api\/tunnels\/([0-9a-f]{32}|[0-9a-f-]{36})(?:\/(detail|token|routes))?$/i);
   if (tunnelRoute) {
     const tunnelId = tunnelRoute[1];
     const action = tunnelRoute[2] || "";
