@@ -1,3 +1,4 @@
+import { connect } from "cloudflare:sockets";
 const encoder = new TextEncoder();
 const COOKIE = "dam_session";
 const SESSION_TTL = 7 * 24 * 60 * 60;
@@ -123,38 +124,118 @@ function safeBaseUrl(value) {
   }
   return url.origin + url.pathname.replace(/\/+$/, "");
 }
+function concatBytes(chunks) {
+  const total = chunks.reduce((n, chunk) => n + chunk.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) { out.set(chunk, offset); offset += chunk.length; }
+  return out;
+}
+function decodeChunkedBody(bytes) {
+  const out = [];
+  let offset = 0;
+  while (offset < bytes.length) {
+    let end = offset;
+    while (end + 1 < bytes.length && !(bytes[end] === 13 && bytes[end + 1] === 10)) end++;
+    if (end + 1 >= bytes.length) throw new Error("Malformed chunked HTTP response");
+    const sizeText = new TextDecoder().decode(bytes.slice(offset, end)).split(";")[0].trim();
+    const size = parseInt(sizeText, 16);
+    if (!Number.isFinite(size) || size < 0) throw new Error("Malformed chunk size in HTTP response");
+    offset = end + 2;
+    if (size === 0) break;
+    if (offset + size > bytes.length) throw new Error("Incomplete chunked HTTP response");
+    out.push(bytes.slice(offset, offset + size));
+    offset += size + 2;
+  }
+  return concatBytes(out);
+}
+async function panelSocketRequest(baseUrl, method, apiPath, headers, body) {
+  const target = new URL(baseUrl);
+  const port = Number(target.port || (target.protocol === "https:" ? 443 : 80));
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("1Panel 地址端口无效");
+  const socket = connect(
+    { hostname: target.hostname, port },
+    { secureTransport: target.protocol === "https:" ? "on" : "off", allowHalfOpen: false }
+  );
+  try {
+    await socket.opened;
+    const path = (target.pathname.replace(/\\/+$/, "") || "") + "/api/v2" + apiPath;
+    const host = target.host;
+    const bodyText = body === undefined ? "" : JSON.stringify(body);
+    const requestHeaders = {
+      Host: host,
+      Connection: "close",
+      "Accept": "application/json",
+      "Accept-Encoding": "identity",
+      "1Panel-Token": headers.token,
+      "1Panel-Timestamp": headers.timestamp,
+      "1Panel-Signature-Version": "hmac-sha256"
+    };
+    if (body !== undefined) {
+      requestHeaders["Content-Type"] = "application/json";
+      requestHeaders["Content-Length"] = String(new TextEncoder().encode(bodyText).length);
+    }
+    const headerText = Object.entries(requestHeaders).map(([k, v]) => k + ": " + v).join("\r\n");
+    const requestText = method + " " + path + " HTTP/1.1\r\n" + headerText + "\r\n\r\n" + bodyText;
+    const writer = socket.writable.getWriter();
+    await writer.write(new TextEncoder().encode(requestText));
+    await writer.close();
+    const reader = socket.readable.getReader();
+    const chunks = [];
+    let total = 0;
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value) {
+        total += value.length;
+        if (total > 2 * 1024 * 1024) throw new Error("1Panel API response exceeds 2 MB");
+        chunks.push(value);
+      }
+    }
+    const rawBytes = concatBytes(chunks);
+    let split = -1;
+    for (let i = 0; i + 3 < rawBytes.length; i++) {
+      if (rawBytes[i] === 13 && rawBytes[i+1] === 10 && rawBytes[i+2] === 13 && rawBytes[i+3] === 10) { split = i; break; }
+    }
+    if (split < 0) throw new Error("1Panel returned an invalid HTTP response");
+    const headerTextResponse = new TextDecoder().decode(rawBytes.slice(0, split));
+    const lines = headerTextResponse.split("\r\n");
+    const statusMatch = lines[0].match(/^HTTP\\/\\d(?:\\.\\d)?\\s+(\\d{3})/);
+    if (!statusMatch) throw new Error("1Panel returned an invalid HTTP status line");
+    const status = Number(statusMatch[1]);
+    const responseHeaders = {};
+    for (const line of lines.slice(1)) {
+      const colon = line.indexOf(":");
+      if (colon > 0) responseHeaders[line.slice(0, colon).trim().toLowerCase()] = line.slice(colon + 1).trim();
+    }
+    let responseBody = rawBytes.slice(split + 4);
+    if ((responseHeaders["transfer-encoding"] || "").toLowerCase().includes("chunked")) responseBody = decodeChunkedBody(responseBody);
+    return {
+      status,
+      headers: responseHeaders,
+      body: new TextDecoder().decode(responseBody)
+    };
+  } finally {
+    try { await socket.close(); } catch {}
+  }
+}
 async function panelRequest(baseUrl, apiKey, method, apiPath, body) {
   const timestamp = Math.floor(Date.now() / 1000).toString();
   const signature = await hmac("1panel:" + timestamp, apiKey);
   const token = Array.from(signature, b => b.toString(16).padStart(2, "0")).join("");
-  const url = baseUrl.replace(/\/+$/, "") + "/api/v2" + apiPath;
-  const response = await fetch(url, {
-    method,
-    headers: {
-      "1Panel-Token": token,
-      "1Panel-Timestamp": timestamp,
-      "1Panel-Signature-Version": "hmac-sha256",
-      "content-type": "application/json"
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(25000)
-  });
-  const raw = await response.text();
+  const response = await panelSocketRequest(baseUrl, method, apiPath, { token, timestamp }, body);
   let payload = {};
-  try { payload = raw ? JSON.parse(raw) : {}; } catch {}
-  if (!response.ok || (payload.code !== undefined && Number(payload.code) !== 200)) {
-    const contentType = response.headers.get("content-type") || "unknown";
-    const server = response.headers.get("server") || "unknown";
-    const ray = response.headers.get("cf-ray") || "";
-    const bodySummary = String(payload.message || payload.msg || raw || "").replace(/\\s+/g, " ").slice(0, 500);
-    const diagnostics = [
+  try { payload = response.body ? JSON.parse(response.body) : {}; } catch {}
+  if (response.status < 200 || response.status >= 300 || (payload.code !== undefined && Number(payload.code) !== 200)) {
+    const contentType = response.headers["content-type"] || "unknown";
+    const server = response.headers["server"] || "unknown";
+    const bodySummary = String(payload.message || payload.msg || response.body || "").replace(/\\s+/g, " ").slice(0, 500);
+    throw new Error([
       "1Panel API HTTP " + response.status,
       "content-type=" + contentType,
       "server=" + server,
-      ray ? "cf-ray=" + ray : "",
       bodySummary ? "response=" + bodySummary : "response body empty"
-    ].filter(Boolean).join("; ");
-    throw new Error(diagnostics);
+    ].join("; "));
   }
   return payload.data !== undefined ? payload.data : payload;
 }
