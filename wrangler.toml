@@ -1,0 +1,11 @@
+name = "domain-access-manager"
+main = "_worker.js"
+compatibility_date = "2026-11-07"
+
+[[d1_databases]]
+binding = "DOMAIN_DB"
+database_name = "domain-access-manager"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+[vars]
+APP_NAME = "Domain Access Manager"
