@@ -118,8 +118,102 @@ function safeName(value) {
 }
 function safeBaseUrl(value) {
   const url = new URL(String(value || ""));
-  if (url.protocol !== "https:" || url.username || url.password) throw new Error("1Panel 地址必须使用 HTTPS，且不能包含用户名或密码");
-  return url.origin;
+  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) throw new Error("1Panel 地址必须使用 HTTPS，且不能包含用户名、密码、查询参数或片段");
+  return url.origin + url.pathname.replace(/\\/+$/, "");
+}
+async function panelRequest(baseUrl, apiKey, method, apiPath, body) {
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const signature = await hmac("1panel:" + timestamp, apiKey);
+  const token = Array.from(signature, b => b.toString(16).padStart(2, "0")).join("");
+  const url = baseUrl.replace(/\\/+$/, "") + "/api/v2" + apiPath;
+  const response = await fetch(url, {
+    method,
+    headers: {
+      "1Panel-Token": token,
+      "1Panel-Timestamp": timestamp,
+      "1Panel-Signature-Version": "hmac-sha256",
+      "content-type": "application/json"
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(25000)
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || (payload.code !== undefined && Number(payload.code) !== 200)) {
+    throw new Error(payload.message || payload.msg || "1Panel API HTTP " + response.status);
+  }
+  return payload.data !== undefined ? payload.data : payload;
+}
+async function getPanelNode(env, nodeId) {
+  const node = await env.DOMAIN_DB.prepare("SELECT * FROM panel_nodes WHERE id=?").bind(nodeId).first();
+  if (!node) throw new Error("1Panel 节点不存在");
+  return { node, apiKey: await decryptSecret(env, node.api_key_ciphertext) };
+}
+function isIPv4(value) {
+  const parts = String(value || "").split(".");
+  return parts.length === 4 && parts.every(p => /^\\d{1,3}$/.test(p) && Number(p) >= 0 && Number(p) <= 255);
+}
+function normalizeHostname(value, zoneName) {
+  const hostname = String(value || "").trim().toLowerCase().replace(/\\.$/, "");
+  if (!/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$/.test(hostname)) throw new Error("请输入有效的完整域名");
+  if (hostname !== zoneName && !hostname.endsWith("." + zoneName)) throw new Error("域名必须属于所选 Cloudflare Zone：" + zoneName);
+  return hostname;
+}
+function normalizeUpstream(value) {
+  const raw = String(value || "").trim();
+  const url = new URL(raw);
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error("反向代理地址必须是 http:// 或 https:// 地址，且不能包含账号、查询参数或片段");
+  return url.origin + url.pathname.replace(/\\/$/, "");
+}
+async function panelPageItems(baseUrl, apiKey, path, body) {
+  const data = await panelRequest(baseUrl, apiKey, "POST", path, body || { page: 1, pageSize: 100 });
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data.items)) return data.items;
+  if (Array.isArray(data.list)) return data.list;
+  return [];
+}
+async function ensurePanelAccounts(env, node, apiKey, credentialId, credentialName, cloudflareToken, email) {
+  const existing = await env.DOMAIN_DB.prepare("SELECT * FROM panel_cloudflare_dns_accounts WHERE panel_node_id=? AND cloudflare_credential_id=?").bind(node.id, credentialId).first();
+  let dnsAccountId = existing ? Number(existing.dns_account_id) : 0;
+  let acmeAccountId = existing && existing.acme_email === email ? Number(existing.acme_account_id || 0) : 0;
+  if (!dnsAccountId) {
+    const dnsName = "DAM-CF-" + credentialId.slice(0, 8);
+    await panelRequest(node.base_url, apiKey, "POST", "/websites/dns", {
+      name: dnsName,
+      type: "CloudFlare",
+      authorization: { email: "", apiKey: cloudflareToken }
+    });
+    const accounts = await panelPageItems(node.base_url, apiKey, "/websites/dns/search", { page: 1, pageSize: 100 });
+    const found = accounts.find(x => x.name === dnsName && x.type === "CloudFlare");
+    if (!found || !found.id) throw new Error("1Panel 已创建 Cloudflare DNS 账户，但未能读取账户 ID；请检查 1Panel DNS 账户列表");
+    dnsAccountId = Number(found.id);
+  }
+  if (!acmeAccountId) {
+    const acmeAccounts = await panelPageItems(node.base_url, apiKey, "/websites/acme/search", { page: 1, pageSize: 100 });
+    const found = acmeAccounts.find(x => String(x.email || "").toLowerCase() === email.toLowerCase() && x.type === "letsencrypt");
+    if (found && found.id) {
+      acmeAccountId = Number(found.id);
+    } else {
+      const created = await panelRequest(node.base_url, apiKey, "POST", "/websites/acme", {
+        email, type: "letsencrypt", keyType: "EC256", useProxy: false
+      });
+      acmeAccountId = Number(created.id || created.ID || created.data?.id || 0);
+      if (!acmeAccountId) {
+        const refreshed = await panelPageItems(node.base_url, apiKey, "/websites/acme/search", { page: 1, pageSize: 100 });
+        const matched = refreshed.find(x => String(x.email || "").toLowerCase() === email.toLowerCase() && x.type === "letsencrypt");
+        acmeAccountId = Number(matched?.id || 0);
+      }
+      if (!acmeAccountId) throw new Error("Let's Encrypt 账户创建成功，但未能读取账户 ID");
+    }
+  }
+  const now = new Date().toISOString();
+  const id = existing?.id || randomId();
+  await env.DOMAIN_DB.prepare("INSERT INTO panel_cloudflare_dns_accounts(id,panel_node_id,cloudflare_credential_id,dns_account_id,acme_account_id,acme_email,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(panel_node_id,cloudflare_credential_id) DO UPDATE SET dns_account_id=excluded.dns_account_id,acme_account_id=excluded.acme_account_id,acme_email=excluded.acme_email,updated_at=excluded.updated_at")
+    .bind(id, node.id, credentialId, dnsAccountId, acmeAccountId, email, now, now).run();
+  return { dnsAccountId, acmeAccountId };
+}
+async function findCloudflareARecord(token, zoneId, hostname) {
+  const records = await cfRequest(token, "/zones/" + encodeURIComponent(zoneId) + "/dns_records?type=A&name=" + encodeURIComponent(hostname) + "&per_page=100");
+  return records;
 }
 async function log(env, operation, type, id, status, message, details = {}) {
   await env.DOMAIN_DB.prepare("INSERT INTO operation_logs(id,operation,resource_type,resource_id,status,message,details_json,created_at) VALUES(?,?,?,?,?,?,?,?)")
@@ -192,24 +286,25 @@ async function api(request, env, path) {
     const apiKey = String(body.apiKey || "").trim();
     if (!apiKey || apiKey.length > 4096) return json({ error: "请填写 1Panel API Key" }, 400);
     try {
-      const timestamp = Math.floor(Date.now() / 1000).toString();
-      const signature = await hmac("1panel:" + timestamp, apiKey);
-      const token = Array.from(signature, b => b.toString(16).padStart(2, "0")).join("");
-      const response = await fetch(baseUrl + "/api/v2/dashboard/base/os", {
-        headers: { "1Panel-Token": token, "1Panel-Timestamp": timestamp, "1Panel-Signature-Version": "hmac-sha256" },
-        signal: AbortSignal.timeout(15000),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || (data.code && data.code !== 200)) throw new Error(data.message || "1Panel API HTTP " + response.status);
+      const info = await panelRequest(baseUrl, apiKey, "GET", "/dashboard/base/all/all");
       const id = randomId();
       const encrypted = await encryptSecret(env, apiKey);
       const now = new Date().toISOString();
-      const info = data.data || data;
       const version = info.version || info.panelVersion || "";
+      const serverInfo = {
+        hostname: info.hostname || "",
+        os: info.os || "",
+        platform: info.platform || "",
+        platformFamily: info.platformFamily || "",
+        distro: info.prettyDistro || "",
+        kernelArch: info.kernelArch || "",
+        kernelVersion: info.kernelVersion || "",
+        ipV4Addr: info.ipV4Addr || ""
+      };
       await env.DOMAIN_DB.prepare("INSERT INTO panel_nodes(id,name,base_url,api_key_ciphertext,panel_version,server_info_json,connection_status,created_at,updated_at,last_checked_at) VALUES(?,?,?,?,?,?,?,?,?,?)")
-        .bind(id, name, baseUrl, encrypted, version, JSON.stringify({ os: info.os || "", platform: info.platform || "", platformFamily: info.platformFamily || "", distro: info.prettyDistro || "", kernelArch: info.kernelArch || "", kernelVersion: info.kernelVersion || "" }), "connected", now, now, now).run();
+        .bind(id, name, baseUrl, encrypted, version, JSON.stringify(serverInfo), "connected", now, now, now).run();
       await log(env, "node.add", "1panel", id, "success", "1Panel 节点连接成功");
-      return json({ ok: true, item: { id, name, baseUrl, panelVersion: version, status: "connected" } });
+      return json({ ok: true, item: { id, name, baseUrl, panelVersion: version, serverInfo, status: "connected" } });
     } catch (error) {
       await log(env, "node.test", "1panel", null, "failed", error.message);
       return json({ error: error.message }, 400);
