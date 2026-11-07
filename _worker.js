@@ -419,7 +419,7 @@ async function api(request, env, path) {
     const {results}=await env.DOMAIN_DB.prepare("SELECT s.id,s.hostname,s.upstream_url,s.status,s.last_error,s.metadata_json,s.created_at,s.updated_at,n.name AS node_name FROM managed_sites s LEFT JOIN panel_nodes n ON n.id=s.panel_node_id ORDER BY s.created_at DESC LIMIT 200").all();
     return json({items:results.map(x=>({id:x.id,hostname:x.hostname,upstream:x.upstream_url,nodeName:x.node_name||"未知 VPS",status:x.status,lastError:x.last_error,metadata:JSON.parse(x.metadata_json||"{}"),createdAt:x.created_at,updatedAt:x.updated_at}))});
   }
-  const domainDelete = path.match(/^\/api\/domains\/([0-9a-f-]+)$/);
+  const domainDelete = path.match(new RegExp("^/api/domains/([0-9a-f-]+)$"));
   if (domainDelete && request.method === "DELETE") {
     const id=domainDelete[1];
     const site=await env.DOMAIN_DB.prepare("SELECT * FROM managed_sites WHERE id=?").bind(id).first();
