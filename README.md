@@ -24,8 +24,11 @@ Implemented:
 - 1Panel v2 node connection test using HMAC-SHA256 API-key signing.
 - Basic responsive UI for credentials, nodes and operation logs.
 
+Implemented in the current branch:
+- Cloudflare DNS record listing, creation and deletion, with zone authorization checks.
+
 Not implemented yet:
-- DNS record creation/update/deletion.
+- DNS record editing/update.
 - ACME/Cloudflare DNS-01 certificate issuance through 1Panel.
 - 1Panel reverse-proxy website creation and HTTPS binding.
 - End-to-end publishing workflow, idempotency/retry and rollback.
@@ -68,7 +71,7 @@ Open the Worker URL and sign in with the `PASSWORD` secret.
 ## Deploy from Cloudflare Dashboard
 
 1. Create a D1 database named `domain-access-manager`.
-2. Open the D1 console and execute [schema/0001_init.sql](schema/0001_init.sql).
+2. Open the D1 console and execute [schema/0001_init.sql and then schema/0002_publish_workflow.sql](schema/0001_init.sql).
 3. Create a Worker named `domain-access-manager`.
 4. Paste the complete contents of `_worker.js` into the Worker's editor.
 5. Under **Settings → Bindings**, add the D1 database binding named `DOMAIN_DB`.
