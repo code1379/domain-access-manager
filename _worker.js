@@ -118,7 +118,9 @@ function safeName(value) {
 }
 function safeBaseUrl(value) {
   const url = new URL(String(value || ""));
-  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) throw new Error("1Panel 地址必须使用 HTTPS，且不能包含用户名、密码、查询参数或片段");
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+    throw new Error("1Panel 地址必须使用 HTTP 或 HTTPS，且不能包含用户名、密码、查询参数或片段");
+  }
   return url.origin + url.pathname.replace(/\/+$/, "");
 }
 async function panelRequest(baseUrl, apiKey, method, apiPath, body) {
@@ -494,7 +496,7 @@ const PAGE = `<!doctype html>
 <nav class="tabs"><button data-tab="overview" class="active">概览</button><button data-tab="cloudflare">Cloudflare</button><button data-tab="nodes">VPS / 1Panel</button><button data-tab="dns">DNS 记录</button><button data-tab="publish">域名接入</button><button data-tab="logs">操作记录</button></nav>
 <section id="overview" class="tab grid"><div class="card"><h3>Cloudflare 凭据</h3><div id="countCf">-</div><small>多个 Token，自动发现 Zone</small></div><div class="card"><h3>1Panel 节点</h3><div id="countNodes">-</div><small>多个 VPS，独立 API 凭据</small></div><div class="card"><h3>下一步</h3><p class="muted">先添加 Cloudflare Token 和 1Panel 节点，随后即可建设 DNS → SSL → 反向代理的一键发布流程。</p></div></section>
 <section id="cloudflare" class="tab hidden grid"><div class="card"><h3>添加 Cloudflare 凭据</h3><form id="cfForm"><div class="field"><label>配置名称</label><input name="name" placeholder="例如：个人域名" required></div><div class="field"><label>API Token</label><input name="token" type="password" autocomplete="off" required></div><button class="primary">验证 Token 并自动获取域名</button></form><div id="cfMsg"></div></div><div class="card"><h3>已保存的 Cloudflare 账号</h3><div id="cfList" class="muted">加载中...</div></div></section>
-<section id="nodes" class="tab hidden grid"><div class="card"><h3>添加 1Panel 节点</h3><form id="nodeForm"><div class="field"><label>节点名称</label><input name="name" placeholder="例如：日本 VPS" required></div><div class="field"><label>1Panel HTTPS 地址</label><input name="baseUrl" placeholder="https://panel.example.com:端口" required></div><div class="field"><label>1Panel API Key</label><input name="apiKey" type="password" autocomplete="off" required></div><button class="primary">测试连接并保存</button></form><div id="nodeMsg"></div><div class="notice">请确保 1Panel API 可从 Worker 网络通过 HTTPS 访问。建议使用 Cloudflare Access Service Auth 或 IP 白名单保护面板。</div></div><div class="card"><h3>已保存的 VPS 节点</h3><div id="nodeList" class="muted">加载中...</div></div></section>
+<section id="nodes" class="tab hidden grid"><div class="card"><h3>添加 1Panel 节点</h3><form id="nodeForm"><div class="field"><label>节点名称</label><input name="name" placeholder="例如：日本 VPS" required></div><div class="field"><label>1Panel 地址（HTTP / HTTPS）</label><input name="baseUrl" placeholder="http://104.233.209.110:32666 或 https://panel.example.com" required></div><div class="field"><label>1Panel API Key</label><input name="apiKey" type="password" autocomplete="off" required></div><button class="primary">测试连接并保存</button></form><div id="nodeMsg"></div><div class="notice">支持 HTTP 和 HTTPS。优先使用 HTTPS；HTTP 仅适合暂时没有 HTTPS 的面板，API 请求及传输的凭据可能被网络中间人窃听或篡改，请只在可信网络环境使用，并尽快为 1Panel 配置 HTTPS。</div></div><div class="card"><h3>已保存的 VPS 节点</h3><div id="nodeList" class="muted">加载中...</div></div></section>
 <section id="dns" class="tab hidden grid">
 <div class="card"><h3>Cloudflare DNS 记录</h3>
 <div class="field"><label>Cloudflare 凭据</label><select id="dnsCredential" style="width:100%;padding:10px;background:#0c1424;color:var(--text);border:1px solid var(--line);border-radius:9px"></select></div>
