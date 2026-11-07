@@ -809,6 +809,90 @@ async function api(request, env, path) {
     await log(env, "node.delete", "1panel", id, "success", "1Panel 节点已删除");
     return json({ ok: true });
   }
+  if (path === "/api/tunnels" && request.method === "GET") {
+    const credentialId = String(new URL(request.url).searchParams.get("credentialId") || "");
+    const zoneId = String(new URL(request.url).searchParams.get("zoneId") || "");
+    if (!credentialId || !zoneId) return json({ error: "请选择 Cloudflare 凭据和 Zone" }, 400);
+    const ctx = await getTunnelContext(env, credentialId, zoneId);
+    const items = await listAccountTunnels(ctx.token, ctx.accountId);
+    return json({ items: items.map(t => ({ id:t.id,name:t.name,status:t.status,createdAt:t.created_at,deletedAt:t.deleted_at,connections:t.connections||[],hostname:t.hostname||"" })), accountId:ctx.accountId, zone:ctx.zone.name });
+  }
+  if (path === "/api/tunnels" && request.method === "POST") {
+    const credentialId = String(body.credentialId || "");
+    const zoneId = String(body.zoneId || "");
+    const name = safeName(body.name);
+    const service = normalizeTunnelService(body.service);
+    const hostname = normalizeTunnelHostname(body.sub, (await getTunnelContext(env,credentialId,zoneId)).zone.name);
+    const ctx = await getTunnelContext(env,credentialId,zoneId);
+    const tunnelSecret = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
+    const tunnel = await tunnelRequest(ctx.token,tunnelApiPath(ctx.accountId),"POST",{name,tunnel_secret:tunnelSecret,config_src:"cloudflare"});
+    let dnsResult = {created:false,recordId:""};
+    try {
+      await tunnelRequest(ctx.token,tunnelApiPath(ctx.accountId,tunnel.id)+"/configurations","PUT",{config:{ingress:[{hostname,service},{service:"http_status:404"}]}});
+      dnsResult = await ensureTunnelCname(ctx.token,zoneId,hostname,tunnel.id);
+    } catch(error) {
+      await tunnelRequest(ctx.token,tunnelApiPath(ctx.accountId,tunnel.id),"DELETE").catch(()=>{});
+      throw error;
+    }
+    await log(env,"tunnel.create","cloudflare_tunnel",tunnel.id,"success","Cloudflare Tunnel 已创建",{name,hostname,service,zone:ctx.zone.name});
+    return json({ok:true,item:{id:tunnel.id,name,hostname,service,dnsCreated:dnsResult.created}});
+  }
+  const tunnelRoute = path.match(/^\/api\/tunnels\/([0-9a-f-]{36})(?:\/(detail|token|routes))?$/i);
+  if (tunnelRoute) {
+    const tunnelId = tunnelRoute[1];
+    const action = tunnelRoute[2] || "";
+    const credentialId = String(body.credentialId || new URL(request.url).searchParams.get("credentialId") || "");
+    const zoneId = String(body.zoneId || new URL(request.url).searchParams.get("zoneId") || "");
+    const ctx = await getTunnelContext(env,credentialId,zoneId);
+    const base = tunnelApiPath(ctx.accountId,tunnelId);
+    if (action === "detail" && request.method === "GET") {
+      const [tunnel,config] = await Promise.all([tunnelRequest(ctx.token,base),getTunnelConfiguration(ctx.token,ctx.accountId,tunnelId)]);
+      return json({item:{id:tunnel.id,name:tunnel.name,status:tunnel.status,createdAt:tunnel.created_at,connections:tunnel.connections||[]},ingress:config.ingress});
+    }
+    if (action === "token" && request.method === "GET") {
+      const result = await tunnelRequest(ctx.token,base+"/token");
+      return json({token:result.token||result});
+    }
+    if (action === "routes" && request.method === "POST") {
+      const {config,ingress}=await getTunnelConfiguration(ctx.token,ctx.accountId,tunnelId);
+      const operation=String(body.action||"add");
+      if(operation==="add"){
+        const service=normalizeTunnelService(body.service);
+        const hostname=normalizeTunnelHostname(body.sub,ctx.zone.name);
+        const rulePath=String(body.path||"").trim();
+        if(rulePath && (!rulePath.startsWith("/") || rulePath.length>200))return json({error:"路径必须以 / 开头且不超过 200 个字符"},400);
+        if(ingress.some(r=>r.hostname===hostname&&(r.path||"")===rulePath))return json({error:"该域名和路径规则已存在"},409);
+        if(ingress.length>=60)return json({error:"单条 Tunnel 最多支持 60 条入口规则"},400);
+        const dns=await ensureTunnelCname(ctx.token,zoneId,hostname,tunnelId);
+        const next=ingress.filter(r=>r.hostname||r.path);next.push({hostname,service,...(rulePath?{path:rulePath}:{})});
+        try{await putTunnelConfiguration(ctx.token,ctx.accountId,tunnelId,config,next)}catch(error){if(dns.created)await cleanupTunnelCnames(ctx.token,ctx.zones,tunnelId,[hostname]);throw error}
+      }else if(operation==="delete"){
+        const hostname=String(body.hostname||"");const rulePath=String(body.path||"");
+        const index=ingress.findIndex(r=>r.hostname===hostname&&(r.path||"")===rulePath);
+        if(index<0)return json({error:"入口规则不存在"},404);
+        const next=ingress.filter((r,i)=>i!==index);
+        await putTunnelConfiguration(ctx.token,ctx.accountId,tunnelId,config,next);
+        if(!next.some(r=>r.hostname===hostname))await cleanupTunnelCnames(ctx.token,ctx.zones,tunnelId,[hostname]);
+      }else return json({error:"未知入口规则操作"},400);
+      const refreshed=await getTunnelConfiguration(ctx.token,ctx.accountId,tunnelId);
+      return json({ok:true,ingress:refreshed.ingress});
+    }
+    if (!action && request.method === "PATCH") {
+      const name=safeName(body.name);
+      const updated=await tunnelRequest(ctx.token,base,"PATCH",{name});
+      return json({ok:true,item:{id:updated.id,name:updated.name}});
+    }
+    if (!action && request.method === "DELETE") {
+      const [tunnel,config]=await Promise.all([tunnelRequest(ctx.token,base),getTunnelConfiguration(ctx.token,ctx.accountId,tunnelId)]);
+      const connections=await tunnelRequest(ctx.token,base+"/connections").catch(()=>[]);
+      if(Array.isArray(connections)&&connections.length)return json({error:"该 Tunnel 仍有活动连接器，请先在运行 cloudflared 的设备上停止连接器，再删除隧道"},409);
+      await tunnelRequest(ctx.token,base,"DELETE");
+      const hosts=config.ingress.map(r=>r.hostname).filter(Boolean);
+      const cleanup=await cleanupTunnelCnames(ctx.token,ctx.zones,tunnelId,hosts);
+      await log(env,"tunnel.delete","cloudflare_tunnel",tunnelId,"success","Cloudflare Tunnel 已删除",{name:tunnel.name,cleanup});
+      return json({ok:true,cleanup});
+    }
+  }
   if (path === "/api/logs" && request.method === "GET") {
     const { results } = await env.DOMAIN_DB.prepare("SELECT id,operation,resource_type,resource_id,status,message,created_at FROM operation_logs ORDER BY created_at DESC LIMIT 100").all();
     return json({ items: results });
