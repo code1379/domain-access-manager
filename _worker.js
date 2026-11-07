@@ -139,9 +139,22 @@ async function panelRequest(baseUrl, apiKey, method, apiPath, body) {
     body: body === undefined ? undefined : JSON.stringify(body),
     signal: AbortSignal.timeout(25000)
   });
-  const payload = await response.json().catch(() => ({}));
+  const raw = await response.text();
+  let payload = {};
+  try { payload = raw ? JSON.parse(raw) : {}; } catch {}
   if (!response.ok || (payload.code !== undefined && Number(payload.code) !== 200)) {
-    throw new Error(payload.message || payload.msg || "1Panel API HTTP " + response.status);
+    const contentType = response.headers.get("content-type") || "unknown";
+    const server = response.headers.get("server") || "unknown";
+    const ray = response.headers.get("cf-ray") || "";
+    const bodySummary = String(payload.message || payload.msg || raw || "").replace(/\\s+/g, " ").slice(0, 500);
+    const diagnostics = [
+      "1Panel API HTTP " + response.status,
+      "content-type=" + contentType,
+      "server=" + server,
+      ray ? "cf-ray=" + ray : "",
+      bodySummary ? "response=" + bodySummary : "response body empty"
+    ].filter(Boolean).join("; ");
+    throw new Error(diagnostics);
   }
   return payload.data !== undefined ? payload.data : payload;
 }
