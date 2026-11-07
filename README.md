@@ -80,7 +80,7 @@ Open the Worker URL and sign in with the `PASSWORD` secret.
 
 ## 1Panel connectivity and API authentication
 
-The Worker calls each 1Panel HTTPS API endpoint from Cloudflare's network. Each node must expose a reachable HTTPS API endpoint. Do not expose an unrestricted panel API to the public Internet.
+The Worker calls each 1Panel API endpoint from Cloudflare's network. Both HTTP and HTTPS endpoint URLs are supported so a panel can be onboarded before HTTPS is configured. Prefer HTTPS whenever available. HTTP provides no transport encryption or server authentication: API signatures do not protect request confidentiality or prevent response tampering, and Cloudflare DNS credentials passed to 1Panel may be exposed on the network. Use HTTP only on a trusted network or temporarily while enabling HTTPS; do not expose an unrestricted panel API to the public Internet.
 
 The current node test uses the current 1Panel v2 HMAC-SHA256 format:
 
@@ -111,7 +111,7 @@ The workflow deliberately refuses to overwrite an existing A record with a diffe
 
 ## Security notes
 
-- Use HTTPS for every 1Panel endpoint.
+- Prefer HTTPS for every 1Panel endpoint. HTTP is supported for bootstrap/temporary use, but must be restricted to a trusted network because API keys, Cloudflare DNS credentials and responses are not transport-encrypted.
 - D1 stores encrypted credentials; the encryption key stays in Worker Secrets.
 - Tokens and API keys are never returned in list responses and must never be written to logs.
 - Keep `PASSWORD`, `SESSION_SECRET`, and `ENCRYPTION_KEY` out of source control.
