@@ -157,6 +157,7 @@ async function panelRequest(baseUrl, apiKey, method, apiPath, body) {
       "content-type=" + contentType,
       "server=" + server,
       ray ? "cf-ray=" + ray : "",
+      "request=" + method + " " + apiPath,
       bodySummary ? "response=" + bodySummary : "response body empty"
     ].filter(Boolean).join("; "));
   }
@@ -192,38 +193,39 @@ async function panelPageItems(baseUrl, apiKey, path, body) {
 }
 async function ensurePanelAccounts(env, node, apiKey, credentialId, credentialName, cloudflareToken, email) {
   const existing = await env.DOMAIN_DB.prepare("SELECT * FROM panel_cloudflare_dns_accounts WHERE panel_node_id=? AND cloudflare_credential_id=?").bind(node.id, credentialId).first();
-  let dnsAccountId = existing ? Number(existing.dns_account_id) : 0;
-  let acmeAccountId = existing && existing.acme_email === email ? Number(existing.acme_account_id || 0) : 0;
-  if (!dnsAccountId) {
-    const dnsName = "DAM-CF-" + credentialId.slice(0, 8);
+  const dnsName = "DAM-CF-" + credentialId.slice(0, 8);
+  const dnsAccounts = await panelPageItems(node.base_url, apiKey, "/websites/dns/search", { page: 1, pageSize: 100 });
+  let dnsAccount = dnsAccounts.find(x => Number(x.id) === Number(existing?.dns_account_id) && x.type === "CloudFlare");
+  if (!dnsAccount) dnsAccount = dnsAccounts.find(x => x.name === dnsName && x.type === "CloudFlare");
+  if (!dnsAccount) {
     await panelRequest(node.base_url, apiKey, "POST", "/websites/dns", {
       name: dnsName,
       type: "CloudFlare",
       authorization: { email: "", apiKey: cloudflareToken }
     });
-    const accounts = await panelPageItems(node.base_url, apiKey, "/websites/dns/search", { page: 1, pageSize: 100 });
-    const found = accounts.find(x => x.name === dnsName && x.type === "CloudFlare");
-    if (!found || !found.id) throw new Error("1Panel 已创建 Cloudflare DNS 账户，但未能读取账户 ID；请检查 1Panel DNS 账户列表");
-    dnsAccountId = Number(found.id);
+    const refreshed = await panelPageItems(node.base_url, apiKey, "/websites/dns/search", { page: 1, pageSize: 100 });
+    dnsAccount = refreshed.find(x => x.name === dnsName && x.type === "CloudFlare");
   }
-  if (!acmeAccountId) {
-    const acmeAccounts = await panelPageItems(node.base_url, apiKey, "/websites/acme/search", { page: 1, pageSize: 100 });
-    const found = acmeAccounts.find(x => String(x.email || "").toLowerCase() === email.toLowerCase() && x.type === "letsencrypt");
-    if (found && found.id) {
-      acmeAccountId = Number(found.id);
-    } else {
-      const created = await panelRequest(node.base_url, apiKey, "POST", "/websites/acme", {
-        email, type: "letsencrypt", keyType: "EC256", useProxy: false
-      });
-      acmeAccountId = Number(created.id || created.ID || created.data?.id || 0);
-      if (!acmeAccountId) {
-        const refreshed = await panelPageItems(node.base_url, apiKey, "/websites/acme/search", { page: 1, pageSize: 100 });
-        const matched = refreshed.find(x => String(x.email || "").toLowerCase() === email.toLowerCase() && x.type === "letsencrypt");
-        acmeAccountId = Number(matched?.id || 0);
-      }
-      if (!acmeAccountId) throw new Error("Let's Encrypt 账户创建成功，但未能读取账户 ID");
+  if (!dnsAccount?.id) throw new Error("1Panel Cloudflare DNS 账户不存在或创建后无法读取，请检查网站设置中的 DNS 账户列表");
+  const dnsAccountId = Number(dnsAccount.id);
+
+  const acmeAccounts = await panelPageItems(node.base_url, apiKey, "/websites/acme/search", { page: 1, pageSize: 100 });
+  let acmeAccount = acmeAccounts.find(x => Number(x.id) === Number(existing?.acme_account_id) && String(x.email || "").toLowerCase() === email.toLowerCase() && x.type === "letsencrypt");
+  if (!acmeAccount) acmeAccount = acmeAccounts.find(x => String(x.email || "").toLowerCase() === email.toLowerCase() && x.type === "letsencrypt");
+  if (!acmeAccount) {
+    const created = await panelRequest(node.base_url, apiKey, "POST", "/websites/acme", {
+      email, type: "letsencrypt", keyType: "EC256", useProxy: false
+    });
+    const createdId = Number(created.id || created.ID || created.data?.id || 0);
+    if (createdId) acmeAccount = { id: createdId, email, type: "letsencrypt" };
+    if (!acmeAccount) {
+      const refreshed = await panelPageItems(node.base_url, apiKey, "/websites/acme/search", { page: 1, pageSize: 100 });
+      acmeAccount = refreshed.find(x => String(x.email || "").toLowerCase() === email.toLowerCase() && x.type === "letsencrypt");
     }
   }
+  if (!acmeAccount?.id) throw new Error("Let's Encrypt 账户不存在或创建后无法读取，请检查 1Panel ACME 账户列表");
+  const acmeAccountId = Number(acmeAccount.id);
+
   const now = new Date().toISOString();
   const id = existing?.id || randomId();
   await env.DOMAIN_DB.prepare("INSERT INTO panel_cloudflare_dns_accounts(id,panel_node_id,cloudflare_credential_id,dns_account_id,acme_account_id,acme_email,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(panel_node_id,cloudflare_credential_id) DO UPDATE SET dns_account_id=excluded.dns_account_id,acme_account_id=excluded.acme_account_id,acme_email=excluded.acme_email,updated_at=excluded.updated_at")
