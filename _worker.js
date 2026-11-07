@@ -127,7 +127,7 @@ async function panelRequest(baseUrl, apiKey, method, apiPath, body) {
   const timestamp = Math.floor(Date.now() / 1000).toString();
   const signature = await hmac("1panel:" + timestamp, apiKey);
   const token = Array.from(signature, b => b.toString(16).padStart(2, "0")).join("");
-  const url = baseUrl.replace(/\\/+$/, "") + "/api/v2" + apiPath;
+  const url = baseUrl.replace(/\/+$/, "") + "/api/v2" + apiPath;
   let response;
   try {
     response = await fetch(url, {
