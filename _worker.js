@@ -317,7 +317,7 @@ async function api(request, env, path) {
     const email = String(body.email || "").trim().toLowerCase();
     const hostnameInput = String(body.hostname || "");
     const upstream = normalizeUpstream(body.upstream);
-    if (!credentialId || !zoneId || !nodeId || !email || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) return json({error:"请选择 Cloudflare Zone、1Panel 节点，并填写有效的 ACME 邮箱"},400);
+    if (!credentialId || !zoneId || !nodeId || !email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json({error:"请选择 Cloudflare Zone、1Panel 节点，并填写有效的 ACME 邮箱"},400);
     const cfRow = await env.DOMAIN_DB.prepare("SELECT * FROM cloudflare_credentials WHERE id=?").bind(credentialId).first();
     if (!cfRow) return json({error:"Cloudflare 凭据不存在"},404);
     const zone = JSON.parse(cfRow.zones_json || "[]").find(z=>z.id===zoneId);
