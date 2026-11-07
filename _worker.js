@@ -215,6 +215,54 @@ async function api(request, env, path) {
       return json({ error: error.message }, 400);
     }
   }
+  if (path === "/api/dns/records" && request.method === "GET") {
+    const credentialId = String(body.credentialId || "");
+    const zoneId = String(body.zoneId || "");
+    if (!credentialId || !zoneId) return json({ error: "请选择 Cloudflare 凭据和域名 Zone" }, 400);
+    const row = await env.DOMAIN_DB.prepare("SELECT token_ciphertext,zones_json FROM cloudflare_credentials WHERE id=?").bind(credentialId).first();
+    if (!row) return json({ error: "Cloudflare 凭据不存在" }, 404);
+    const zones = JSON.parse(row.zones_json || "[]");
+    const zone = zones.find(z => z.id === zoneId);
+    if (!zone) return json({ error: "该 Zone 不在此 Token 的授权范围内" }, 403);
+    const token = await decryptSecret(env, row.token_ciphertext);
+    const records = await cfRequest(token, "/zones/" + encodeURIComponent(zoneId) + "/dns_records?per_page=100");
+    return json({ items: records.map(r => ({ id:r.id,type:r.type,name:r.name,content:r.content,ttl:r.ttl,proxied:r.proxied,comment:r.comment })) });
+  }
+  if (path === "/api/dns/records" && request.method === "POST") {
+    const credentialId = String(body.credentialId || "");
+    const zoneId = String(body.zoneId || "");
+    const type = String(body.type || "").toUpperCase();
+    const name = String(body.name || "").trim().toLowerCase();
+    const content = String(body.content || "").trim();
+    const ttl = Number(body.ttl || 1);
+    const proxied = Boolean(body.proxied);
+    if (!credentialId || !zoneId || !name || !content || !["A","AAAA","CNAME","TXT"].includes(type)) return json({ error: "请填写有效的 DNS 记录信息" }, 400);
+    if (type === "A" && !/^\\d{1,3}(\\.\\d{1,3}){3}$/.test(content)) return json({ error: "A 记录必须填写 IPv4 地址" }, 400);
+    if (type === "AAAA" && !content.includes(":")) return json({ error: "AAAA 记录必须填写 IPv6 地址" }, 400);
+    if (type === "CNAME" && proxied && !content) return json({ error: "CNAME 目标不能为空" }, 400);
+    const row = await env.DOMAIN_DB.prepare("SELECT token_ciphertext,zones_json FROM cloudflare_credentials WHERE id=?").bind(credentialId).first();
+    if (!row) return json({ error: "Cloudflare 凭据不存在" }, 404);
+    const zone = JSON.parse(row.zones_json || "[]").find(z => z.id === zoneId);
+    if (!zone) return json({ error: "该 Zone 不在此 Token 的授权范围内" }, 403);
+    const token = await decryptSecret(env, row.token_ciphertext);
+    const record = await cfRequest(token, "/zones/" + encodeURIComponent(zoneId) + "/dns_records", "POST", { type,name,content,ttl,proxied: type === "TXT" ? false : proxied });
+    await log(env, "dns.create", "dns_record", record.id, "success", "DNS 记录已创建", {zone:zone.name,type,name});
+    return json({ ok:true, item:{id:record.id,type:record.type,name:record.name,content:record.content,ttl:record.ttl,proxied:record.proxied} });
+  }
+  const dnsDelete = path.match(/^\\/api\\/dns\\/records\\/([0-9a-f-]+)$/);
+  if (dnsDelete && request.method === "DELETE") {
+    const credentialId = String(body.credentialId || "");
+    const zoneId = String(body.zoneId || "");
+    const recordId = dnsDelete[1];
+    const row = await env.DOMAIN_DB.prepare("SELECT token_ciphertext,zones_json FROM cloudflare_credentials WHERE id=?").bind(credentialId).first();
+    if (!row) return json({ error: "Cloudflare 凭据不存在" }, 404);
+    const zone = JSON.parse(row.zones_json || "[]").find(z => z.id === zoneId);
+    if (!zone) return json({ error: "该 Zone 不在此 Token 的授权范围内" }, 403);
+    const token = await decryptSecret(env, row.token_ciphertext);
+    await cfRequest(token, "/zones/" + encodeURIComponent(zoneId) + "/dns_records/" + encodeURIComponent(recordId), "DELETE");
+    await log(env, "dns.delete", "dns_record", recordId, "success", "DNS 记录已删除", {zone:zone.name});
+    return json({ok:true});
+  }
   const nodeDelete = path.match(/^\/api\/nodes\/([0-9a-f-]+)$/);
   if (nodeDelete && request.method === "DELETE") {
     const id = nodeDelete[1];
