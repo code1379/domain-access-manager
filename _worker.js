@@ -250,7 +250,7 @@ async function api(request, env, path) {
     await log(env, "dns.create", "dns_record", record.id, "success", "DNS 记录已创建", {zone:zone.name,type,name});
     return json({ ok:true, item:{id:record.id,type:record.type,name:record.name,content:record.content,ttl:record.ttl,proxied:record.proxied} });
   }
-  const dnsDelete = path.match(/^\\/api\\/dns\\/records\\/([0-9a-f-]+)$/);
+  const dnsDelete = path.match(/^\/api\/dns\/records\/([0-9a-f-]+)$/);
   if (dnsDelete && request.method === "DELETE") {
     const credentialId = String(body.credentialId || "");
     const zoneId = String(body.zoneId || "");
