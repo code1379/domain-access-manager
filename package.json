@@ -1,0 +1,17 @@
+{
+  "name": "domain-access-manager",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Worker control panel for Cloudflare DNS and 1Panel reverse proxy sites",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:local": "wrangler d1 execute domain-access-manager --local --file=schema/0001_init.sql",
+    "db:remote": "wrangler d1 execute domain-access-manager --remote --file=schema/0001_init.sql",
+    "check": "node --check _worker.js && wrangler deploy --dry-run"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
