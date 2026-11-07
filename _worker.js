@@ -310,6 +310,114 @@ async function api(request, env, path) {
       return json({ error: error.message }, 400);
     }
   }
+  if (path === "/api/publish" && request.method === "POST") {
+    const credentialId = String(body.credentialId || "");
+    const zoneId = String(body.zoneId || "");
+    const nodeId = String(body.nodeId || "");
+    const email = String(body.email || "").trim().toLowerCase();
+    const hostnameInput = String(body.hostname || "");
+    const upstream = normalizeUpstream(body.upstream);
+    if (!credentialId || !zoneId || !nodeId || !email || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) return json({error:"请选择 Cloudflare Zone、1Panel 节点，并填写有效的 ACME 邮箱"},400);
+    const cfRow = await env.DOMAIN_DB.prepare("SELECT * FROM cloudflare_credentials WHERE id=?").bind(credentialId).first();
+    if (!cfRow) return json({error:"Cloudflare 凭据不存在"},404);
+    const zone = JSON.parse(cfRow.zones_json || "[]").find(z=>z.id===zoneId);
+    if (!zone) return json({error:"所选 Zone 不属于此 Cloudflare Token"},403);
+    const hostname = normalizeHostname(hostnameInput,zone.name);
+    const {node,apiKey} = await getPanelNode(env,nodeId);
+    if (node.connection_status !== "connected") return json({error:"1Panel 节点当前未连接，请先重新测试连接"},409);
+    const info = JSON.parse(node.server_info_json || "{}");
+    const ip = String(body.ipv4 || info.ipV4Addr || "").trim();
+    if (!isIPv4(ip)) return json({error:"无法从 1Panel 获取有效公网 IPv4，请手动填写服务器 IPv4 地址"},400);
+    const token = await decryptSecret(env,cfRow.token_ciphertext);
+    const existingSites = await env.DOMAIN_DB.prepare("SELECT id,status FROM managed_sites WHERE hostname=?").bind(hostname).first();
+    if (existingSites) return json({error:"该域名已在本工具中登记，当前状态："+existingSites.status+"。请在域名管理中查看或恢复任务，不能重复创建"},409);
+    const existingRecords = await findCloudflareARecord(token,zoneId,hostname);
+    if (existingRecords.length) {
+      if (existingRecords.some(r=>r.content!==ip)) return json({error:"Cloudflare 已存在不同 IP 的 A 记录，本工具不会覆盖现有记录。请先检查 DNS 后再接入"},409);
+    } else {
+      await cfRequest(token,"/zones/"+encodeURIComponent(zoneId)+"/dns_records","POST",{type:"A",name:hostname,content:ip,ttl:1,proxied:Boolean(body.proxied)});
+    }
+    const siteId = randomId();
+    const now = new Date().toISOString();
+    const meta = {stage:"provisioning",zoneName:zone.name,zoneId,ipv4:ip,upstream,email,proxied:Boolean(body.proxied),dnsCreated:existingRecords.length===0,createdDnsRecordId:existingRecords[0]?.id||null};
+    await env.DOMAIN_DB.prepare("INSERT INTO managed_sites(id,hostname,zone_id,cloudflare_credential_id,panel_node_id,upstream_url,status,metadata_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)")
+      .bind(siteId,hostname,zoneId,credentialId,nodeId,upstream,"provisioning",JSON.stringify(meta),now,now).run();
+    try {
+      const accounts = await ensurePanelAccounts(env,node,apiKey,credentialId,cfRow.name,token,email);
+      meta.dnsAccountId=accounts.dnsAccountId;
+      meta.acmeAccountId=accounts.acmeAccountId;
+      const ssl = await panelRequest(node.base_url,apiKey,"POST","/websites/ssl",{
+        primaryDomain:hostname,otherDomains:"",provider:"dnsAccount",acmeAccountId:accounts.acmeAccountId,dnsAccountId:accounts.dnsAccountId,autoRenew:true,keyType:"EC256",disableCNAME:false,skipDNS:false,apply:true,description:"Domain Access Manager"
+      });
+      const sslId=Number(ssl.id||ssl.ID||ssl.data?.id||0);
+      if(!sslId) throw new Error("1Panel 已提交证书申请，但未返回证书 ID");
+      meta.sslId=sslId;
+      meta.stage="certificate_pending";
+      await env.DOMAIN_DB.prepare("UPDATE managed_sites SET ssl_id=?,status=?,metadata_json=?,updated_at=? WHERE id=?")
+        .bind(String(sslId), "certificate_pending",JSON.stringify(meta),new Date().toISOString(),siteId).run();
+      await log(env,"publish.start","managed_site",siteId,"success","已创建 DNS 并提交 1Panel DNS-01 证书申请",{hostname,zone:zone.name,node:node.name,sslId});
+      return json({ok:true,item:{id:siteId,hostname,status:"certificate_pending",stage:meta.stage,sslId}});
+    } catch(error) {
+      meta.stage="failed";
+      meta.error=error.message;
+      await env.DOMAIN_DB.prepare("UPDATE managed_sites SET status='failed',last_error=?,metadata_json=?,updated_at=? WHERE id=?")
+        .bind(error.message,JSON.stringify(meta),new Date().toISOString(),siteId).run();
+      await log(env,"publish.start","managed_site",siteId,"failed",error.message,{hostname});
+      return json({error:error.message,siteId},400);
+    }
+  }
+  if (path === "/api/publish" && request.method === "GET") {
+    const {results}=await env.DOMAIN_DB.prepare("SELECT id,hostname,status,last_error,metadata_json,created_at,updated_at FROM managed_sites ORDER BY created_at DESC LIMIT 100").all();
+    return json({items:results.map(x=>({id:x.id,hostname:x.hostname,status:x.status,lastError:x.last_error,metadata:JSON.parse(x.metadata_json||"{}"),createdAt:x.created_at,updatedAt:x.updated_at}))});
+  }
+  const publishProgress = path.match(/^\\/api\\/publish\\/([0-9a-f-]+)\\/progress$/);
+  if (publishProgress && request.method === "POST") {
+    const id=publishProgress[1];
+    const site=await env.DOMAIN_DB.prepare("SELECT * FROM managed_sites WHERE id=?").bind(id).first();
+    if(!site) return json({error:"域名任务不存在"},404);
+    const meta=JSON.parse(site.metadata_json||"{}");
+    if(site.status==="ready") return json({ok:true,item:{id,hostname:site.hostname,status:site.status,websiteId:meta.websiteId,sslId:site.ssl_id}});
+    if(site.status==="failed") return json({ok:false,item:{id,hostname:site.hostname,status:site.status,error:site.last_error}});
+    const {node,apiKey}=await getPanelNode(env,site.panel_node_id);
+    try {
+      if(!meta.sslId) throw new Error("证书任务缺少 1Panel SSL ID");
+      const ssl=await panelRequest(node.base_url,apiKey,"GET","/websites/ssl/"+encodeURIComponent(meta.sslId));
+      const sslData=ssl.websiteSSL||ssl;
+      const status=String(sslData.status||"").toLowerCase();
+      if(status==="error"||status==="applyerror") throw new Error(sslData.message||"1Panel 证书申请失败");
+      if(status!=="ready" || !sslData.pem || !sslData.privateKey) {
+        return json({ok:true,item:{id,hostname:site.hostname,status:"certificate_pending",certificateStatus:status||"pending",message:sslData.message||"正在等待 Let's Encrypt 完成 DNS-01 验证"}});
+      }
+      if(!meta.websiteId) {
+        const groups=await panelPageItems(node.base_url,apiKey,"/groups/search",{type:"website"});
+        const group=groups.find(x=>x.isDefault)||groups[0];
+        if(!group?.id) throw new Error("1Panel 没有可用的网站分组，无法创建反向代理网站");
+        const alias=site.hostname.replace(/[^a-z0-9.-]/g,"-").replace(/\\./g,"-").slice(0,60);
+        const existing=await panelPageItems(node.base_url,apiKey,"/websites/search",{page:1,pageSize:100});
+        const matched=existing.find(x=>x.primaryDomain===site.hostname||x.alias===alias);
+        if(matched?.id) throw new Error("1Panel 已存在同名网站（ID "+matched.id+"），为避免接管或覆盖，本工具停止自动创建");
+        const taskId=randomId();
+        await panelRequest(node.base_url,apiKey,"POST","/websites",{
+          type:"proxy",alias,remark:"Created by Domain Access Manager",proxy:site.upstream_url,webSiteGroupID:Number(group.id),IPV6:false,
+          domains:[{domain:site.hostname,port:80,ssl:false}],enableSSL:true,websiteSSLID:Number(meta.sslId),taskID:taskId
+        });
+        const created=await panelPageItems(node.base_url,apiKey,"/websites/search",{page:1,pageSize:100});
+        const website=created.find(x=>x.primaryDomain===site.hostname||x.alias===alias);
+        if(!website?.id) throw new Error("1Panel 已提交网站创建任务，但暂时未能读取网站 ID；请在 1Panel 网站列表确认结果后再重试");
+        meta.websiteId=Number(website.id);
+      }
+      meta.stage="ready";
+      await env.DOMAIN_DB.prepare("UPDATE managed_sites SET panel_website_id=?,status='ready',metadata_json=?,last_error=NULL,updated_at=? WHERE id=?")
+        .bind(String(meta.websiteId),JSON.stringify(meta),new Date().toISOString(),id).run();
+      await log(env,"publish.complete","managed_site",id,"success","证书已签发并创建 HTTPS 反向代理网站",{hostname:site.hostname,websiteId:meta.websiteId,sslId:meta.sslId});
+      return json({ok:true,item:{id,hostname:site.hostname,status:"ready",websiteId:meta.websiteId,sslId:meta.sslId}});
+    } catch(error) {
+      await env.DOMAIN_DB.prepare("UPDATE managed_sites SET status='failed',last_error=?,metadata_json=?,updated_at=? WHERE id=?")
+        .bind(error.message,JSON.stringify({...meta,stage:"failed",error:error.message}),new Date().toISOString(),id).run();
+      await log(env,"publish.progress","managed_site",id,"failed",error.message,{hostname:site.hostname});
+      return json({error:error.message,item:{id,hostname:site.hostname,status:"failed"}},400);
+    }
+  }
   if (path === "/api/dns/records" && request.method === "GET") {
     const query = new URL(request.url).searchParams;
     const credentialId = String(query.get("credentialId") || "");
