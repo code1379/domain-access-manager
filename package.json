@@ -9,7 +9,9 @@
     "deploy": "wrangler deploy",
     "db:local": "wrangler d1 execute domain-access-manager --local --file=schema/0001_init.sql && wrangler d1 execute domain-access-manager --local --file=schema/0002_publish_workflow.sql",
     "db:remote": "wrangler d1 execute domain-access-manager --remote --file=schema/0001_init.sql && wrangler d1 execute domain-access-manager --remote --file=schema/0002_publish_workflow.sql",
-    "check": "node --check _worker.js && wrangler deploy --dry-run"
+    "check": "node --check _worker.js && wrangler deploy --dry-run",
+    "db:account-token-migration": "wrangler d1 execute domain-access-manager --remote --file=schema/0003_account_api_tokens.sql",
+    "db:account-token-migration:local": "wrangler d1 execute domain-access-manager --local --file=schema/0003_account_api_tokens.sql"
   },
   "devDependencies": {
     "wrangler": "^4.0.0"
