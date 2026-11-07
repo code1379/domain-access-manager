@@ -202,7 +202,6 @@ async function panelSocketRequest(baseUrl, method, apiPath, headers, body) {
     const lines = headerTextResponse.split("\r\n");
     const status = Number((lines[0].split(/\s+/)[1] || "").trim());
     if (!Number.isInteger(status) || status < 100 || status > 599) throw new Error("1Panel returned an invalid HTTP status line");
-    const status = Number(statusMatch[1]);
     const responseHeaders = {};
     for (const line of lines.slice(1)) {
       const colon = line.indexOf(":");
