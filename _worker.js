@@ -378,16 +378,18 @@ async function api(request, env, path) {
     const existingSites = await env.DOMAIN_DB.prepare("SELECT id,status FROM managed_sites WHERE hostname=?").bind(hostname).first();
     if (existingSites) return json({error:"该域名已在本工具中登记，当前状态："+existingSites.status+"。请在域名管理中查看或恢复任务，不能重复创建"},409);
     const existingRecords = await findCloudflareARecord(token,zoneId,hostname);
-    if (existingRecords.length) {
-      if (existingRecords.some(r=>r.content!==ip)) return json({error:"Cloudflare 已存在不同 IP 的 A 记录，本工具不会覆盖现有记录。请先检查 DNS 后再接入"},409);
-    } else {
-      await cfRequest(token,"/zones/"+encodeURIComponent(zoneId)+"/dns_records","POST",{type:"A",name:hostname,content:ip,ttl:1,proxied:Boolean(body.proxied)});
+    if (existingRecords.length && existingRecords.some(r=>r.content!==ip)) return json({error:"Cloudflare 已存在不同 IP 的 A 记录，本工具不会覆盖现有记录。请先检查 DNS 后再接入"},409);
+    const dnsCreated = existingRecords.length === 0;
+    let dnsRecordId = existingRecords[0]?.id || null;
+    if (dnsCreated) {
+      const createdRecord = await cfRequest(token,"/zones/"+encodeURIComponent(zoneId)+"/dns_records","POST",{type:"A",name:hostname,content:ip,ttl:1,proxied:Boolean(body.proxied)});
+      dnsRecordId = createdRecord?.id || null;
     }
     const siteId = randomId();
     const now = new Date().toISOString();
-    const meta = {stage:"provisioning",zoneName:zone.name,zoneId,ipv4:ip,upstream,email,proxied:Boolean(body.proxied),dnsCreated:existingRecords.length===0,createdDnsRecordId:existingRecords[0]?.id||null};
-    await env.DOMAIN_DB.prepare("INSERT INTO managed_sites(id,hostname,zone_id,cloudflare_credential_id,panel_node_id,upstream_url,status,metadata_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)")
-      .bind(siteId,hostname,zoneId,credentialId,nodeId,upstream,"provisioning",JSON.stringify(meta),now,now).run();
+    const meta = {stage:"provisioning",zoneName:zone.name,zoneId,ipv4:ip,upstream,email,proxied:Boolean(body.proxied),dnsCreated,createdDnsRecordId:dnsCreated?dnsRecordId:null,sslCreatedByDam:false};
+    await env.DOMAIN_DB.prepare("INSERT INTO managed_sites(id,hostname,zone_id,cloudflare_credential_id,panel_node_id,upstream_url,dns_record_id,status,metadata_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
+      .bind(siteId,hostname,zoneId,credentialId,nodeId,upstream,dnsRecordId,"provisioning",JSON.stringify(meta),now,now).run();
     try {
       const accounts = await ensurePanelAccounts(env,node,apiKey,credentialId,cfRow.name,token,email);
       meta.dnsAccountId=accounts.dnsAccountId;
@@ -398,6 +400,7 @@ async function api(request, env, path) {
       const sslId=Number(ssl.id||ssl.ID||ssl.data?.id||0);
       if(!sslId) throw new Error("1Panel 已提交证书申请，但未返回证书 ID");
       meta.sslId=sslId;
+      meta.sslCreatedByDam=true;
       meta.stage="certificate_pending";
       await env.DOMAIN_DB.prepare("UPDATE managed_sites SET ssl_id=?,status=?,metadata_json=?,updated_at=? WHERE id=?")
         .bind(String(sslId), "certificate_pending",JSON.stringify(meta),new Date().toISOString(),siteId).run();
@@ -410,6 +413,102 @@ async function api(request, env, path) {
         .bind(error.message,JSON.stringify(meta),new Date().toISOString(),siteId).run();
       await log(env,"publish.start","managed_site",siteId,"failed",error.message,{hostname});
       return json({error:error.message,siteId},400);
+    }
+  }
+  if (path === "/api/domains" && request.method === "GET") {
+    const {results}=await env.DOMAIN_DB.prepare("SELECT s.id,s.hostname,s.upstream_url,s.status,s.last_error,s.metadata_json,s.created_at,s.updated_at,n.name AS node_name FROM managed_sites s LEFT JOIN panel_nodes n ON n.id=s.panel_node_id ORDER BY s.created_at DESC LIMIT 200").all();
+    return json({items:results.map(x=>({id:x.id,hostname:x.hostname,upstream:x.upstream_url,nodeName:x.node_name||"未知 VPS",status:x.status,lastError:x.last_error,metadata:JSON.parse(x.metadata_json||"{}"),createdAt:x.created_at,updatedAt:x.updated_at}))});
+  }
+  const domainDelete = path.match(/^\\/api\\/domains\\/([0-9a-f-]+)$/);
+  if (domainDelete && request.method === "DELETE") {
+    const id=domainDelete[1];
+    const site=await env.DOMAIN_DB.prepare("SELECT * FROM managed_sites WHERE id=?").bind(id).first();
+    if(!site) return json({ok:true,alreadyDeleted:true});
+    const meta=JSON.parse(site.metadata_json||"{}");
+    const {node,apiKey}=await getPanelNode(env,site.panel_node_id);
+    const cleanup={...(meta.cleanup||{})};
+    const saveCleanup=async(status="deleting",error=null)=>{
+      meta.cleanup=cleanup;
+      await env.DOMAIN_DB.prepare("UPDATE managed_sites SET status=?,last_error=?,metadata_json=?,updated_at=? WHERE id=?")
+        .bind(status,error,JSON.stringify(meta),new Date().toISOString(),id).run();
+    };
+    try {
+      await saveCleanup("deleting",null);
+
+      const websiteId=Number(meta.websiteId||site.panel_website_id||0);
+      if(websiteId&&!cleanup.websiteDeleted){
+        let website=null;
+        try{website=await panelRequest(node.base_url,apiKey,"GET","/websites/"+encodeURIComponent(websiteId));}
+        catch(error){if(!/record not found|not found|HTTP 404/i.test(error.message||""))throw new Error("检查 1Panel 网站失败："+error.message);}
+        const websiteData=website?.website||website;
+        if(websiteData){
+          const actualDomain=String(websiteData.primaryDomain||"").toLowerCase();
+          if(actualDomain&&actualDomain!==site.hostname.toLowerCase())throw new Error("1Panel 网站 ID 与域名不匹配，已停止删除以保护其他网站");
+          await panelRequest(node.base_url,apiKey,"POST","/websites/del",{id:websiteId,deleteApp:false,deleteBackup:false,forceDelete:false,deleteDB:false});
+        }
+        cleanup.websiteDeleted=true;
+        await saveCleanup();
+      }
+
+      const sslId=Number(meta.sslId||site.ssl_id||0);
+      if(sslId&&!cleanup.sslDeleted){
+        if(meta.sslCreatedByDam===false){
+          cleanup.sslPreserved=true;
+        }else{
+          let sslRecord=null;
+          try{sslRecord=await panelRequest(node.base_url,apiKey,"GET","/websites/ssl/"+encodeURIComponent(sslId));}
+          catch(error){if(!/record not found|not found|HTTP 404/i.test(error.message||""))throw new Error("检查 1Panel SSL 证书失败："+error.message);}
+          const sslData=sslRecord?.websiteSSL||sslRecord;
+          if(sslData){
+            const sslDomain=String(sslData.primaryDomain||"").toLowerCase();
+            if(sslDomain&&sslDomain!==site.hostname.toLowerCase())throw new Error("SSL 证书 ID 与域名不匹配，已停止删除以保护其他证书");
+            const owned=meta.sslCreatedByDam===true||sslData.description==="Domain Access Manager";
+            if(owned){
+              await panelRequest(node.base_url,apiKey,"POST","/websites/ssl/del",{ids:[sslId]});
+            }else{
+              cleanup.sslPreserved=true;
+            }
+          }
+        }
+        cleanup.sslDeleted=true;
+        await saveCleanup();
+      }
+
+      if(meta.dnsCreated&&!cleanup.dnsDeleted){
+        const cfRow=await env.DOMAIN_DB.prepare("SELECT token_ciphertext FROM cloudflare_credentials WHERE id=?").bind(site.cloudflare_credential_id).first();
+        if(!cfRow)throw new Error("Cloudflare 凭据不存在，无法清理本工具创建的 DNS 记录");
+        const cloudflareToken=await decryptSecret(env,cfRow.token_ciphertext);
+        const records=await cfRequest(cloudflareToken,"/zones/"+encodeURIComponent(site.zone_id)+"/dns_records?type=A&name="+encodeURIComponent(site.hostname)+"&per_page=100");
+        let record=null;
+        if(meta.createdDnsRecordId){
+          record=records.find(x=>x.id===meta.createdDnsRecordId)||null;
+        }else{
+          const matching=records.filter(x=>x.content===String(meta.ipv4||""));
+          if(matching.length===1)record=matching[0];
+          else if(matching.length>1)throw new Error("找到多条相同 IP 的 A 记录，无法确认哪条由本工具创建；为安全起见未删除 DNS");
+        }
+        if(record&&record.content===String(meta.ipv4||"")){
+          await cfRequest(cloudflareToken,"/zones/"+encodeURIComponent(site.zone_id)+"/dns_records/"+encodeURIComponent(record.id),"DELETE");
+          cleanup.dnsDeleted=true;
+        }else{
+          cleanup.dnsPreserved=true;
+          cleanup.dnsDeleted=true;
+        }
+        await saveCleanup();
+      }else if(!meta.dnsCreated){
+        cleanup.dnsPreserved=true;
+        cleanup.dnsDeleted=true;
+        await saveCleanup();
+      }
+
+      await env.DOMAIN_DB.prepare("DELETE FROM managed_sites WHERE id=?").bind(id).run();
+      try{await log(env,"domain.delete","managed_site",id,"success","域名接入及其托管资源已清理",{hostname:site.hostname,cleanup});}catch{}
+      return json({ok:true,item:{id,hostname:site.hostname,cleanup}});
+    }catch(error){
+      const message=error?.message||String(error);
+      await saveCleanup("delete_failed",message);
+      await log(env,"domain.delete","managed_site",id,"failed",message,{hostname:site.hostname,cleanup});
+      return json({error:message,item:{id,hostname:site.hostname,status:"delete_failed",cleanup}},400);
     }
   }
   if (path === "/api/publish" && request.method === "GET") {
@@ -437,6 +536,7 @@ async function api(request, env, path) {
         const reusable=sameDomain.find(x=>Number(x.acmeAccountId)===accounts.acmeAccountId&&Number(x.dnsAccountId)===accounts.dnsAccountId);
         if(reusable?.id) {
           meta.sslId=Number(reusable.id);
+          meta.sslCreatedByDam=false;
         } else if(sameDomain.length) {
           throw new Error("1Panel 已存在该域名的 SSL 记录，但使用了其他 ACME 或 DNS 账户。为避免重复申请，请先在 1Panel 检查该域名证书");
         } else {
@@ -444,12 +544,14 @@ async function api(request, env, path) {
             primaryDomain:site.hostname,otherDomains:"",provider:"dnsAccount",acmeAccountId:accounts.acmeAccountId,dnsAccountId:accounts.dnsAccountId,autoRenew:true,keyType:"EC256",disableCNAME:false,skipDNS:false,apply:true,description:"Domain Access Manager"
           });
           meta.sslId=Number(createdSSL.id||createdSSL.ID||createdSSL.data?.id||0);
+          meta.sslCreatedByDam=true;
           if(!meta.sslId) {
             const refreshed=await panelPageItems(node.base_url,apiKey,"/websites/ssl/search",{
               page:1,pageSize:100,domain:site.hostname,orderBy:"created_at",order:"descending"
             });
             const found=refreshed.find(x=>String(x.primaryDomain||"").toLowerCase()===site.hostname.toLowerCase()&&Number(x.acmeAccountId)===accounts.acmeAccountId&&Number(x.dnsAccountId)===accounts.dnsAccountId);
             meta.sslId=Number(found?.id||0);
+            if(meta.sslId) meta.sslCreatedByDam=true;
           }
           if(!meta.sslId) throw new Error("1Panel 未返回 SSL ID，且无法通过域名查询到新建的证书记录");
         }
