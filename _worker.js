@@ -421,10 +421,20 @@ async function api(request, env, path) {
   if (cfDelete && request.method === "DELETE") {
     const id = cfDelete[1];
     const linked = await env.DOMAIN_DB.prepare("SELECT COUNT(*) AS count FROM managed_sites WHERE cloudflare_credential_id=?").bind(id).first();
-    if (Number(linked?.count || 0)) return json({ error: "该凭据仍被网站使用，不能删除" }, 409);
-    await env.DOMAIN_DB.prepare("DELETE FROM cloudflare_credentials WHERE id=?").bind(id).run();
-    await log(env, "credential.delete", "cloudflare", id, "success", "Cloudflare 凭据已删除");
-    return json({ ok: true });
+    if (Number(linked?.count || 0)) return json({ error: "该凭据仍被域名接入任务使用，请先在「域名管理」中删除这些域名，再删除 Cloudflare 凭据" }, 409);
+    const panelMappings = await env.DOMAIN_DB.prepare("SELECT COUNT(*) AS count FROM panel_cloudflare_dns_accounts WHERE cloudflare_credential_id=?").bind(id).first();
+    // These rows only map this DAM credential to DNS/ACME account IDs in 1Panel.
+    // Remove the local mapping before deleting the credential; do NOT delete the
+    // actual 1Panel DNS or ACME accounts because certificates outside DAM may use them.
+    await env.DOMAIN_DB.batch([
+      env.DOMAIN_DB.prepare("DELETE FROM panel_cloudflare_dns_accounts WHERE cloudflare_credential_id=?").bind(id),
+      env.DOMAIN_DB.prepare("DELETE FROM cloudflare_credentials WHERE id=?").bind(id)
+    ]);
+    await log(env, "credential.delete", "cloudflare", id, "success", "Cloudflare 凭据已删除；本地 1Panel DNS/ACME 关联缓存已清理，1Panel 中的账户本身予以保留", {
+      removedPanelMappings: Number(panelMappings?.count || 0),
+      panelAccountsPreserved: true
+    });
+    return json({ ok: true, removedPanelMappings: Number(panelMappings?.count || 0), panelAccountsPreserved: true });
   }
   if (path === "/api/nodes" && request.method === "GET") {
     const { results } = await env.DOMAIN_DB.prepare("SELECT id,name,base_url,panel_version,server_info_json,connection_status,created_at,updated_at,last_checked_at FROM panel_nodes ORDER BY created_at DESC").all();
