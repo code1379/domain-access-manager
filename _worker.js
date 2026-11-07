@@ -955,9 +955,44 @@ async function api(request, env, path) {
       return json({ok:true,ingress:refreshed.ingress});
     }
     if (!action && request.method === "PATCH") {
-      const name=safeName(body.name);
-      const updated=await tunnelRequest(ctx.token,base,"PATCH",{name});
-      return json({ok:true,item:{id:updated.id,name:updated.name}});
+      const tunnel = await tunnelRequest(ctx.token,base);
+      const name = body.name ? safeName(body.name) : tunnel.name;
+      const zoneId = String(body.zoneId || "");
+      if (!zoneId) return json({error:"请选择公开域名所属 Zone"},400);
+      const routeCtx = await getTunnelContext(env,credentialId,zoneId);
+      const hostname = normalizeTunnelHostname(body.sub,routeCtx.zone.name);
+      const service = normalizeTunnelService(body.service);
+      const rulePath = String(body.path || "").trim();
+      if (rulePath && (!rulePath.startsWith("/") || rulePath.length > 200)) return json({error:"路径必须以 / 开头且不超过 200 个字符"},400);
+      const {config,ingress} = await getTunnelConfiguration(ctx.token,ctx.accountId,tunnelId);
+      const oldHostname = String(body.oldHostname || "").trim().toLowerCase();
+      const oldPath = String(body.oldPath || "");
+      let index = oldHostname ? ingress.findIndex(r => String(r.hostname || "").toLowerCase() === oldHostname && (r.path || "") === oldPath) : ingress.findIndex(r => r.hostname);
+      if (oldHostname && index < 0) return json({error:"要编辑的入口路由已不存在，请刷新后重试"},404);
+      if (ingress.some((r,i) => i !== index && String(r.hostname || "").toLowerCase() === hostname && (r.path || "") === rulePath)) return json({error:"目标域名和路径规则已存在"},409);
+      if (index < 0 && ingress.filter(r => r.hostname || r.path).length >= 60) return json({error:"单条 Tunnel 最多支持 60 条入口规则"},400);
+      const next = ingress.slice();
+      const nextRule = {...(index >= 0 ? next[index] : {}),hostname,service};
+      if (rulePath) nextRule.path = rulePath; else delete nextRule.path;
+      if (index >= 0) next[index] = nextRule; else next.unshift(nextRule);
+      const dnsResult = await ensureTunnelCname(ctx.token,zoneId,hostname,tunnelId);
+      try { await putTunnelConfiguration(ctx.token,ctx.accountId,tunnelId,config,next); }
+      catch (error) { if (dnsResult.created) await cleanupTunnelCnames(ctx.token,ctx.zones,tunnelId,[hostname]); throw error; }
+      let updated = tunnel;
+      if (name !== tunnel.name) {
+        try { updated = await tunnelRequest(ctx.token,base,"PATCH",{name}); }
+        catch (error) {
+          let rollbackMessage = "";
+          try { await putTunnelConfiguration(ctx.token,ctx.accountId,tunnelId,config,ingress); }
+          catch (rollbackError) { rollbackMessage = "；入口配置回滚也失败：" + (rollbackError?.message || String(rollbackError)); }
+          if (dnsResult.created) await cleanupTunnelCnames(ctx.token,ctx.zones,tunnelId,[hostname]);
+          throw new Error("入口配置已尝试更新，但隧道名称更新失败：" + (error?.message || String(error)) + rollbackMessage);
+        }
+      }
+      let cleanup = {removed:[],warnings:[]};
+      if (oldHostname && hostname !== oldHostname && !next.some(r => String(r.hostname || "").toLowerCase() === oldHostname)) cleanup = await cleanupTunnelCnames(ctx.token,ctx.zones,tunnelId,[oldHostname]);
+      await log(env,"tunnel.update","cloudflare_tunnel",tunnelId,"success","Cloudflare Tunnel 与入口配置已更新",{name:updated.name,oldHostname,hostname,service,cleanup});
+      return json({ok:true,item:{id:tunnelId,name:updated.name,hostname,service},dnsCreated:dnsResult.created,cleanup});
     }
     if (!action && request.method === "DELETE") {
       const [tunnel,config]=await Promise.all([tunnelRequest(ctx.token,base),getTunnelConfiguration(ctx.token,ctx.accountId,tunnelId)]);
@@ -980,51 +1015,95 @@ async function api(request, env, path) {
 const PAGE = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Domain Access Manager</title>
 <style>
-:root{color-scheme:dark;--bg:#0b1020;--panel:#121a2b;--panel2:#182338;--line:#26344b;--text:#edf3ff;--muted:#93a4bd;--accent:#6aa7ff;--green:#45c58a;--red:#ff7777}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button,input{font:inherit}button{cursor:pointer;border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:9px;padding:9px 13px}button.primary{background:#2767c8;border-color:#3478dc}button.danger{color:#ff9999}input{width:100%;padding:11px 12px;background:#0c1424;border:1px solid var(--line);border-radius:9px;color:var(--text);outline:none}input:focus{border-color:var(--accent)}.wrap{max-width:1120px;margin:auto;padding:28px 22px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}.brand{font-size:19px;font-weight:700}.muted{color:var(--muted)}.tabs{display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap}.tabs button.active{background:#1e3d68;border-color:#477fc8}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:15px}.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px}.card h3{margin:0 0 14px;font-size:16px}.field{margin:12px 0}.field label{display:block;margin-bottom:6px;color:var(--muted);font-size:12px}.actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.dns-toggle{width:42px;height:24px;padding:2px;border-radius:20px;background:#3b4659;border:1px solid #52617a;display:inline-flex;align-items:center;justify-content:flex-start;transition:background .15s,border-color .15s;vertical-align:middle}.dns-toggle span{width:18px;height:18px;background:#e9eef7;border-radius:50%;display:block;transition:transform .15s}.dns-toggle[aria-checked="true"]{background:#e78a20;border-color:#f5a33c}.dns-toggle[aria-checked="true"] span{transform:translateX(18px)}.dns-toggle:disabled{opacity:.5;cursor:not-allowed}.proxy-state{font-size:11px;color:var(--muted)}.proxy-state.on{color:#ffb34d}.item{padding:14px 0;border-top:1px solid var(--line)}.item:first-child{border-top:0}.row{display:flex;justify-content:space-between;gap:12px;align-items:center}.domain-main{min-width:0;flex:1}.domain-main b{overflow-wrap:anywhere}.domain-side{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-shrink:0;white-space:nowrap}.pill{font-size:11px;color:var(--green);background:#16382e;padding:3px 8px;border-radius:20px}.pill.bad{color:#ff9d9d;background:#3a2228}.zone{display:inline-block;border:1px solid var(--line);border-radius:20px;padding:3px 8px;margin:5px 4px 0 0;font-size:11px;color:var(--muted)}.hidden{display:none!important}.notice{padding:10px 12px;border-radius:9px;background:#1a2b43;color:#a9caff;margin:12px 0}.error{background:#3b2027;color:#ffaaaa}.login{max-width:390px;margin:12vh auto;padding:26px}.login h1{margin:0 0 5px}.empty{padding:22px;text-align:center;color:var(--muted)}small{color:var(--muted)}@media(max-width:600px){.wrap{padding:18px 13px}.top{align-items:flex-start}.row{align-items:flex-start}}
-.tunnel-page-head{display:flex;justify-content:space-between;align-items:flex-end;gap:18px;flex-wrap:wrap}
-.tunnel-page-head>div:first-child{min-width:220px;flex:1}
-.tunnel-page-head p{margin:6px 0 0;max-width:650px;line-height:1.6}
-.tunnel-controls{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap}
-.tunnel-controls .field{margin:0;min-width:170px}
-.tunnel-controls select{width:100%;min-width:170px;max-width:220px;padding:10px;background:#0c1424;color:var(--text);border:1px solid var(--line);border-radius:9px}
-.tunnel-table-head,.tunnel-row{display:grid;grid-template-columns:minmax(0,1fr) 120px minmax(320px,auto);align-items:center;gap:16px}
-.tunnel-table-head{padding:11px 12px;color:var(--muted);font-size:12px;border-bottom:1px solid var(--line);font-weight:600}
-.tunnel-row{padding:14px 12px;border-bottom:1px solid var(--line);min-height:68px}
-.tunnel-row:last-child{border-bottom:0}
-.tunnel-info{min-width:0}
-.tunnel-info b{display:block;overflow-wrap:anywhere}
-.tunnel-info small{display:block;margin-top:4px;overflow-wrap:anywhere;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}
-.tunnel-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
-.tunnel-actions button{white-space:nowrap}
-.tunnel-modal-backdrop{position:fixed;inset:0;z-index:100;background:rgba(5,8,16,.68);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);display:none}
-.tunnel-modal-backdrop.show{display:block}
-.tunnel-modal{position:fixed;left:50%;top:50%;transform:translate(-50%,-48%) scale(.98);z-index:101;width:min(560px,calc(100% - 28px));max-height:calc(100vh - 40px);overflow-y:auto;padding:22px;background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:0 24px 70px rgba(0,0,0,.48);display:none;opacity:0}
-.tunnel-modal.show{display:block;animation:tunnelModalIn .18s ease forwards}
-@keyframes tunnelModalIn{to{transform:translate(-50%,-50%) scale(1);opacity:1}}
-.tunnel-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:18px}
-.tunnel-modal-head h3{margin:0 0 5px}
-.tunnel-modal-head p{margin:0;font-size:13px}
-.tunnel-modal-close{font-size:24px;line-height:1;width:34px;height:34px;padding:0;display:flex;align-items:center;justify-content:center;color:var(--muted);background:transparent;border:0}
+:root{color-scheme:dark;--bg:#0f1115;--card:#1a1d23;--text:#e8eaee;--sub:#8b93a0;--line:#2a2e36;--brand:#f6821f;--brand2:#ff9d4a;--ok:#22a06b;--bad:#d93f3f;--warn:#e8a317;--in:#12151a;--code:#0a0b0e;--side:#15181d;--side2:#262b33;--sideText:#c9cfd8;--r-sm:10px;--r-md:14px;--r-lg:16px;--sh-sm:0 2px 8px rgba(0,0,0,.18);--sh-md:0 8px 24px rgba(0,0,0,.25);--sh-lg:0 24px 70px rgba(0,0,0,.5);--focus:0 0 0 3px rgba(246,130,31,.18)}
+html[data-theme="light"]{color-scheme:light;--bg:#f4f5f7;--card:#fff;--text:#1d2129;--sub:#7a828e;--line:#e3e6ea;--in:#f4f5f7;--code:#0f5849;--side:#eef0f4;--side2:#dfe3e9;--sideText:#3d4450;--sh-sm:0 2px 8px rgba(30,34,40,.06);--sh-md:0 8px 24px rgba(30,34,40,.09);--sh-lg:0 24px 70px rgba(30,34,40,.16)}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}html,body{min-height:100%;margin:0}
+body{min-height:100vh;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:var(--text);background:var(--bg);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;background-image:radial-gradient(900px 480px at 18% -8%,rgba(246,130,31,.10),transparent 60%),linear-gradient(180deg,var(--bg),var(--bg));background-attachment:fixed}
+html[data-theme="light"] body{background-image:radial-gradient(900px 480px at 18% -8%,rgba(246,130,31,.10),transparent 60%),linear-gradient(180deg,#f7f4ef 0%,#eef0f4 100%)}
+button,input,select,textarea{font:inherit}button{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:9px 13px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--in);color:var(--text);font-size:13px;font-weight:550;cursor:pointer;white-space:nowrap;transition:transform .12s,border-color .15s,background .15s,color .15s,box-shadow .15s,opacity .15s}
+button:hover{border-color:var(--brand);box-shadow:var(--sh-sm)}button:active{transform:scale(.98)}button:disabled{opacity:.55;pointer-events:none}
+button.primary{border:0;color:#fff;background:linear-gradient(135deg,var(--brand),var(--brand2));box-shadow:0 3px 12px rgba(246,130,31,.28);font-weight:650}button.primary:hover{box-shadow:0 5px 18px rgba(246,130,31,.4);transform:translateY(-1px)}
+button.danger{color:var(--bad)}button.danger:hover{border-color:var(--bad);background:rgba(217,63,63,.08)}button.icon-btn{width:36px;height:36px;padding:0;font-size:16px}
+input,select,textarea{width:100%;min-width:0;padding:11px 12px;border:1px solid var(--line);border-radius:var(--r-sm);color:var(--text);background:var(--in);outline:none;transition:border-color .15s,box-shadow .15s,background .15s}
+input:hover,select:hover,textarea:hover{border-color:color-mix(in srgb,var(--brand) 36%,var(--line))}input:focus,select:focus,textarea:focus{border-color:var(--brand);box-shadow:var(--focus)}
+input::placeholder,textarea::placeholder{color:var(--sub);opacity:.72}input[type="checkbox"]{width:16px;height:16px;accent-color:var(--brand);vertical-align:middle;margin:0 7px 0 0}textarea{resize:vertical}
+small,.muted{color:var(--sub)}.hidden{display:none!important}
+.app-shell{display:grid;grid-template-columns:218px minmax(0,1fr);grid-template-rows:64px minmax(0,1fr);width:100%;height:100vh;min-height:100vh;overflow:hidden}
+.app-shell>.tabs{grid-column:1;grid-row:1 / 3;display:flex;flex-direction:column;align-items:stretch;gap:3px;width:218px;height:100vh;overflow-y:auto;padding:18px 12px 14px;background:var(--side);border-right:1px solid var(--line);z-index:12}
+.side-brand{display:flex;align-items:center;gap:11px;padding:2px 8px 22px;margin-bottom:8px;color:var(--text)}
+.side-brand .ic{width:42px;height:42px;flex:none;display:flex;align-items:center;justify-content:center;border-radius:13px;color:#fff;background:linear-gradient(135deg,var(--brand),var(--brand2));box-shadow:0 3px 12px rgba(246,130,31,.32)}
+.side-brand .ic svg{width:23px;height:23px}.side-brand .bt{display:flex;flex-direction:column;min-width:0;line-height:1.15}.side-brand .bt b{font-size:14px;font-weight:800;white-space:nowrap}.side-brand .bt i{font-style:normal;font-size:9px;font-weight:650;letter-spacing:1.8px;color:var(--sub);margin-top:5px;white-space:nowrap}
+.nav-caption{padding:8px 12px 5px;color:var(--sub);font-size:10px;font-weight:700;letter-spacing:1.1px;text-transform:uppercase}
+.app-shell>.tabs button[data-tab]{display:flex;align-items:center;justify-content:flex-start;gap:11px;width:100%;min-height:40px;padding:10px 12px;border:0;border-radius:10px;background:transparent;color:var(--sideText);text-align:left;font-size:13.5px;font-weight:550;box-shadow:none}
+.app-shell>.tabs button[data-tab]:hover{background:var(--side2);color:var(--text);transform:translateX(2px)}.app-shell>.tabs button[data-tab].active{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff;font-weight:650;box-shadow:0 4px 14px rgba(246,130,31,.30)}
+.nav-ico{width:18px;height:18px;flex:none;display:inline-flex;align-items:center;justify-content:center}.nav-ico svg{width:17px;height:17px;display:block}.side-foot{margin-top:auto;padding:14px 10px 4px;border-top:1px solid var(--line);color:var(--sub);font-size:10px;letter-spacing:1.1px}
+.app-shell>.top{grid-column:2;grid-row:1;display:flex;align-items:center;justify-content:space-between;gap:16px;min-width:0;height:64px;margin:0;padding:0 26px;background:color-mix(in srgb,var(--card) 88%,transparent);border-bottom:1px solid var(--line);backdrop-filter:blur(12px) saturate(1.35);-webkit-backdrop-filter:blur(12px) saturate(1.35);z-index:5}
+.top-left{display:flex;align-items:center;gap:12px;min-width:0}.top-title{display:flex;flex-direction:column;min-width:0;line-height:1.2}.top-title b{font-size:15px;font-weight:750}.top-title small{font-size:11px;margin-top:4px}.top-actions{display:flex;align-items:center;gap:8px}#menu{display:none}
+.app-shell>.tab{grid-column:2;grid-row:2;align-self:stretch;justify-self:stretch;min-width:0;width:100%;max-width:1600px;height:calc(100vh - 64px);overflow:auto;margin:0 auto;padding:24px 28px 34px}
+.app-shell>.tab.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));align-content:start;align-items:start;gap:15px}.app-shell>.tab.hidden{display:none!important}
+.card{width:100%;min-width:0;margin:0;padding:19px;background:var(--card);border:1px solid var(--line);border-radius:var(--r-lg);box-shadow:var(--sh-sm);transition:box-shadow .18s,border-color .18s}.card:hover{box-shadow:var(--sh-md)}
+.card h3{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 0 13px;font-size:15px;font-weight:720;letter-spacing:.15px}.card p{line-height:1.65}
+.field{min-width:0;margin:13px 0}.field label{display:block;margin:0 0 6px;color:var(--sub);font-size:12px;font-weight:550}.field-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(150px,1.2fr);gap:9px;align-items:center}
+.actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.row{display:flex;align-items:center;justify-content:space-between;gap:12px}.domain-main{flex:1;min-width:0}.domain-main b{overflow-wrap:anywhere}.domain-side{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex:none;white-space:nowrap}
+.item{padding:12px 6px;border-top:1px solid var(--line);border-radius:var(--r-sm);transition:background .15s}.item:first-child{border-top:0}.item:hover{background:color-mix(in srgb,var(--card) 84%,var(--side2))}
+.pill{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border:1px solid var(--line);border-radius:20px;background:var(--in);color:var(--sub);font-size:11px;font-weight:600;white-space:nowrap}
+.pill.healthy,.pill.success{border-color:rgba(34,160,107,.18);background:rgba(34,160,107,.14);color:var(--ok)}.pill.bad,.pill.down{border-color:rgba(217,63,63,.18);background:rgba(217,63,63,.13);color:var(--bad)}.pill.degraded{border-color:rgba(232,163,23,.18);background:rgba(232,163,23,.14);color:var(--warn)}
+.zone{display:inline-block;padding:3px 8px;margin:5px 4px 0 0;border:1px solid var(--line);border-radius:20px;color:var(--sub);font-size:11px}
+.notice{padding:11px 13px;margin:12px 0;border:1px solid transparent;border-radius:var(--r-md);background:color-mix(in srgb,var(--side2) 75%,transparent);color:var(--sub);font-size:13px;line-height:1.6}.notice.error{border-color:rgba(217,63,63,.18);background:rgba(217,63,63,.12);color:#e58c8c}
+.empty{padding:26px 12px;text-align:center;color:var(--sub);font-size:13px}
+.login{width:min(390px,calc(100% - 28px));margin:12vh auto 0;padding:30px;background:color-mix(in srgb,var(--card) 92%,transparent);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border:1px solid var(--line);border-radius:22px;box-shadow:var(--sh-lg)}
+.login h1{margin:0 0 5px;font-size:21px;font-weight:800;letter-spacing:.2px}.login p{margin:6px 0 22px}.login button.primary{width:100%;margin-top:14px;padding:12px}.login .field{margin:12px 0}
+.dns-toggle{width:42px;height:24px;padding:2px;border-radius:20px;background:#3b4659;border:1px solid #52617a;display:inline-flex;align-items:center;justify-content:flex-start;transition:background .15s,border-color .15s;vertical-align:middle}.dns-toggle span{width:18px;height:18px;background:#e9eef7;border-radius:50%;display:block;transition:transform .15s}.dns-toggle[aria-checked="true"]{background:var(--brand);border-color:var(--brand2)}.dns-toggle[aria-checked="true"] span{transform:translateX(18px)}.dns-toggle:disabled{opacity:.5;cursor:not-allowed}.proxy-state{font-size:11px;color:var(--sub)}.proxy-state.on{color:var(--brand2)}
+.tunnel-page-head{display:flex;justify-content:space-between;align-items:flex-end;gap:18px;flex-wrap:wrap}.tunnel-page-head>div:first-child{min-width:220px;flex:1}.tunnel-page-head p{margin:6px 0 0;max-width:650px;line-height:1.6;color:var(--sub);font-size:13px}
+.tunnel-controls{display:flex;align-items:flex-end;gap:9px;flex-wrap:wrap}.tunnel-controls .field{margin:0;min-width:220px}.tunnel-controls select{width:100%;min-width:190px}
+.tunnel-table-head,.tunnel-row{display:grid;grid-template-columns:minmax(0,1fr) 110px 72px minmax(280px,auto);align-items:center;gap:14px}.tunnel-table-head{padding:12px;color:var(--sub);font-size:11px;border-bottom:1px solid var(--line);font-weight:700;letter-spacing:.3px}
+.tunnel-row{position:relative;padding:15px 12px;border-bottom:1px solid var(--line);transition:background .15s}.tunnel-row:hover{background:color-mix(in srgb,var(--card) 84%,var(--side2))}.tunnel-row:last-child{border-bottom:0}.tunnel-info{min-width:0}.tunnel-info b{display:block;overflow-wrap:anywhere;font-weight:700}.tunnel-info small{display:block;margin-top:4px;overflow-wrap:anywhere;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px}
+.tunnel-title-line{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.tunnel-route-summary{display:grid;gap:3px;margin-top:7px;color:var(--sub);font-size:12px;line-height:1.55}.tunnel-route-summary span{overflow-wrap:anywhere}.tunnel-route-summary b{display:inline;color:var(--text);font-weight:650}.tunnel-route-summary em{font-style:normal;color:var(--brand2)}
+.tunnel-actions{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:wrap}.tunnel-actions button{padding:6px 10px;font-size:11.5px}
+.tunnel-modal-backdrop{position:fixed;inset:0;z-index:100;background:rgba(5,7,10,.72);backdrop-filter:blur(5px);-webkit-backdrop-filter:blur(5px);display:none}.tunnel-modal-backdrop.show{display:block}
+.tunnel-modal{position:fixed;left:50%;top:50%;transform:translate(-50%,-47%) scale(.98);z-index:101;width:min(590px,calc(100% - 28px));max-height:calc(100vh - 40px);overflow-y:auto;padding:22px;background:var(--card);border:1px solid var(--line);border-radius:var(--r-lg);box-shadow:var(--sh-lg);display:none;opacity:0}
+.tunnel-modal.show{display:block;animation:tunnelModalIn .18s ease forwards}@keyframes tunnelModalIn{to{transform:translate(-50%,-50%) scale(1);opacity:1}}
+.tunnel-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:18px}.tunnel-modal-head h3{margin:0 0 5px;font-size:16px}.tunnel-modal-head p{margin:0;color:var(--sub);font-size:12px}
+.tunnel-modal-close{width:32px;height:32px;padding:0;border:0;background:transparent;color:var(--sub);font-size:22px}.tunnel-modal-close:hover{background:var(--side2);color:var(--text);box-shadow:none}
 .tunnel-modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px;padding-top:16px;border-top:1px solid var(--line)}
-@media(max-width:850px){.tunnel-controls{width:100%}.tunnel-controls .field{flex:1}.tunnel-controls select{max-width:none}}
-@media(max-width:700px){.tunnel-table-head{display:none}.tunnel-row{grid-template-columns:minmax(0,1fr) auto;gap:10px}.tunnel-row .tunnel-actions{grid-column:1/-1;justify-content:flex-start}.tunnel-controls{align-items:stretch}.tunnel-controls .field{min-width:100%;}.tunnel-modal{padding:18px}}
-.tunnel-page-head{display:flex;justify-content:space-between;align-items:flex-end;gap:18px;flex-wrap:wrap}.tunnel-page-head>div:first-child{min-width:220px;flex:1}.tunnel-page-head p{margin:6px 0 0;line-height:1.6}.tunnel-controls{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap}.tunnel-controls .field{margin:0;min-width:220px}.tunnel-controls select{width:100%;padding:10px;background:#0c1424;color:var(--text);border:1px solid var(--line);border-radius:9px}
-.tunnel-table-head,.tunnel-row{display:grid;grid-template-columns:minmax(0,1fr) 95px 70px minmax(290px,auto);align-items:center;gap:14px}.tunnel-table-head{padding:12px;color:var(--muted);font-size:12px;border-bottom:1px solid var(--line);font-weight:600}.tunnel-row{padding:15px 12px;border-bottom:1px solid var(--line)}.tunnel-row:last-child{border-bottom:0}.tunnel-info{min-width:0}.tunnel-info b{display:block;overflow-wrap:anywhere}.tunnel-info small{display:block;margin-top:4px;overflow-wrap:anywhere}.tunnel-route-summary{margin-top:7px;font-size:12px;color:var(--muted);display:grid;gap:3px}.tunnel-route-summary span{overflow-wrap:anywhere}.tunnel-actions{display:flex;align-items:center;justify-content:flex-end;gap:7px;flex-wrap:wrap}.tunnel-actions button{white-space:nowrap}.tunnel-modal-backdrop{position:fixed;inset:0;z-index:100;background:rgba(5,8,16,.7);backdrop-filter:blur(4px);display:none}.tunnel-modal-backdrop.show{display:block}.tunnel-modal{position:fixed;left:50%;top:50%;transform:translate(-50%,-48%) scale(.98);z-index:101;width:min(590px,calc(100% - 28px));max-height:calc(100vh - 40px);overflow-y:auto;padding:22px;background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:0 24px 70px rgba(0,0,0,.48);display:none;opacity:0}.tunnel-modal.show{display:block;animation:tunnelModalIn .18s ease forwards}@keyframes tunnelModalIn{to{transform:translate(-50%,-50%) scale(1);opacity:1}}.tunnel-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:18px}.tunnel-modal-head h3{margin:0 0 5px}.tunnel-modal-head p{margin:0;font-size:13px}.tunnel-modal-close{font-size:24px;line-height:1;width:34px;height:34px;padding:0;display:flex;align-items:center;justify-content:center;color:var(--muted);background:transparent;border:0}.tunnel-modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px;padding-top:16px;border-top:1px solid var(--line)}.tunnel-token-block{margin:14px 0}.tunnel-token-block label{display:block;color:var(--muted);font-size:12px;margin-bottom:6px}.tunnel-token-line{display:flex;gap:8px;align-items:stretch}.tunnel-token-line textarea{flex:1;min-width:0;min-height:76px;resize:vertical;font-family:ui-monospace,monospace;font-size:12px}.tunnel-route-item{padding:12px 0;border-bottom:1px solid var(--line)}.tunnel-route-item:last-child{border-bottom:0}.tunnel-route-item .row{align-items:center}.tunnel-route-item small{display:block;margin-top:4px;overflow-wrap:anywhere}@media(max-width:900px){.tunnel-table-head{display:none}.tunnel-row{grid-template-columns:minmax(0,1fr) auto;gap:10px}.tunnel-row .tunnel-route-summary{grid-column:1/-1}.tunnel-row .tunnel-actions{grid-column:1/-1;justify-content:flex-start}.tunnel-controls .field{min-width:100%}}
+.preview{margin-top:12px;padding:11px 13px;border-radius:var(--r-sm);background:var(--in);font-size:12.5px;color:var(--sub);white-space:nowrap;overflow-x:auto;line-height:1.6}.preview b{color:var(--brand);font-weight:700}
+.tunnel-token-block{margin:14px 0}.tunnel-token-block label{display:block;color:var(--sub);font-size:12px;margin-bottom:6px}.tunnel-token-line{display:flex;gap:8px;align-items:stretch}.tunnel-token-line textarea{flex:1;min-width:0;min-height:76px;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;background:var(--code);color:var(--text)}
+.tunnel-route-item{padding:12px 0;border-bottom:1px solid var(--line)}.tunnel-route-item:last-child{border-bottom:0}.tunnel-route-item .row{align-items:center}.tunnel-route-item small{display:block;margin-top:4px;overflow-wrap:anywhere}
+@media(max-width:1050px){.tunnel-table-head,.tunnel-row{grid-template-columns:minmax(0,1fr) 90px 64px minmax(230px,auto);gap:9px}.tunnel-actions button{padding:6px 8px}}
+@media(max-width:760px){.app-shell{display:block;height:100vh;overflow:hidden}.app-shell>.tabs{position:fixed;left:0;top:0;bottom:0;width:230px;height:100dvh;transform:translateX(-102%);transition:transform .2s;box-shadow:none}.app-shell>.tabs.open{transform:none;box-shadow:0 0 40px rgba(0,0,0,.4)}.app-shell>.top{position:relative;height:60px;padding:0 12px}#menu{display:inline-flex}.app-shell>.tab{height:calc(100vh - 60px);padding:18px 13px 26px}.app-shell>.tab.grid{grid-template-columns:1fr}.tunnel-table-head{display:none}.tunnel-row{grid-template-columns:minmax(0,1fr) auto;gap:9px}.tunnel-row .tunnel-route-summary{grid-column:1/-1}.tunnel-row .tunnel-actions{grid-column:1/-1;justify-content:flex-start}.tunnel-controls{width:100%;align-items:stretch}.tunnel-controls .field{min-width:100%}.field-row{grid-template-columns:1fr}.tunnel-modal{padding:18px}.top-actions button{padding:7px 9px}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
 </style></head><body><div id="login" class="card login"><h1>Domain Access Manager</h1><p class="muted">Cloudflare DNS · 1Panel · Reverse Proxy</p><form id="loginForm"><div class="field"><label>管理员密码</label><input name="password" type="password" required autofocus autocomplete="current-password"></div><button class="primary" style="width:100%">登录</button></form><div id="loginMsg"></div></div>
-<div id="app" class="wrap hidden"><header class="top"><div><div class="brand">Domain Access Manager</div><small>Cloudflare DNS & 1Panel 管理</small></div><button id="logout">退出登录</button></header>
-<nav class="tabs"><button data-tab="overview" class="active">概览</button><button data-tab="cloudflare">Cloudflare</button><button data-tab="nodes">VPS / 1Panel</button><button data-tab="dns">DNS 记录</button><button data-tab="publish">域名接入</button><button data-tab="domains">域名管理</button><button data-tab="tunnels">Tunnel 管理</button><button data-tab="logs">操作记录</button></nav>
+<div id="app" class="app-shell hidden">
+<nav class="tabs" id="sideNav">
+ <div class="side-brand"><span class="ic"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M17.5 19a4.5 4.5 0 1 0-.42-8.98 6 6 0 1 0-11.06 3.1A3.5 3.5 0 0 0 6.5 19Z"/></svg></span><span class="bt"><b>Domain Access Manager</b><i>DOMAIN CONTROL</i></span></div>
+ <div class="nav-caption">Workspace</div>
+ <button data-tab="overview" class="active"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg></span>概览</button>
+ <button data-tab="cloudflare"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M17.5 19a4.5 4.5 0 1 0-.42-8.98 6 6 0 1 0-11.06 3.1A3.5 3.5 0 0 0 6.5 19Z"/></svg></span>Cloudflare</button>
+ <button data-tab="nodes"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01M11 7h6M11 17h6"/></svg></span>VPS / 1Panel</button>
+ <button data-tab="dns"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg></span>DNS 记录</button>
+ <div class="nav-caption">Domains & Apps</div>
+ <button data-tab="publish"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m12 3-9 5 9 5 9-5-9-5Z"/><path d="m3 13 9 5 9-5M3 18l9 5 9-5"/></svg></span>域名接入</button>
+ <button data-tab="domains"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 10v10"/></svg></span>域名管理</button>
+ <button data-tab="tunnels"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M17.5 19a4.5 4.5 0 1 0-.42-8.98 6 6 0 1 0-11.06 3.1A3.5 3.5 0 0 0 6.5 19Z"/><path d="M9 12v4m0-4 6-3"/></svg></span>Tunnel 管理</button>
+ <div class="nav-caption">System</div>
+ <button data-tab="logs"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></span>操作记录</button>
+ <div class="side-foot">CLOUDFLARE · DOMAIN CONTROL</div>
+</nav>
+<header class="top">
+ <div class="top-left"><button type="button" id="menu" class="icon-btn" aria-label="打开导航">☰</button><div class="top-title"><b id="pageTitle">概览</b><small>Cloudflare DNS · 1Panel · Tunnel 管理</small></div></div>
+ <div class="top-actions"><button type="button" id="theme" class="icon-btn" title="切换明暗主题" aria-label="切换明暗主题">◐</button><button id="logout">退出登录</button></div>
+</header>
 <section id="overview" class="tab grid"><div class="card"><h3>Cloudflare 凭据</h3><div id="countCf">-</div><small>多个 Token，自动发现 Zone</small></div><div class="card"><h3>1Panel 节点</h3><div id="countNodes">-</div><small>多个 VPS，独立 API 凭据</small></div><div class="card"><h3>下一步</h3><p class="muted">先添加 Cloudflare Token 和 1Panel 节点，随后即可建设 DNS → SSL → 反向代理的一键发布流程。</p></div></section>
 <section id="cloudflare" class="tab hidden grid"><div class="card"><h3>添加 Cloudflare 账户 API Token</h3><p class="muted">仅支持 Account API Token。请填写 Cloudflare 账户 ID（32 位），Token 将加密保存在 D1，不会返回到页面。</p><form id="cfForm"><input id="cfCredentialId" name="credentialId" type="hidden"><div class="field"><label>配置名称</label><input name="name" placeholder="例如：主账号" required></div><div class="field"><label>Cloudflare Account ID（32 位）</label><input name="accountId" placeholder="从 dash.cloudflare.com/ 后的 32 位账户 ID 获取" minlength="32" maxlength="32" pattern="[a-fA-F0-9]{32}" required></div><div class="field"><label>账户 API Token</label><input name="token" type="password" autocomplete="off" placeholder="粘贴账户 API Token" required></div><button class="primary" id="cfSubmitButton">验证并添加账户 API Token</button><button type="button" id="cfCancelEdit" class="hidden">取消更新</button></form><div class="notice">权限至少需要 Account → Cloudflare Tunnel → Edit，以及 Zone → DNS → Edit、Zone → Read。更新已有凭据会保留关联的域名任务和 1Panel 账户映射。</div><div id="cfMsg"></div></div><div class="card"><h3>已保存的 Cloudflare 账号</h3><div id="cfList" class="muted">加载中...</div></div></section>
 <section id="nodes" class="tab hidden grid"><div class="card"><h3>添加 1Panel 节点</h3><form id="nodeForm"><div class="field"><label>节点名称</label><input name="name" placeholder="例如：日本 VPS" required></div><div class="field"><label>1Panel 地址（HTTP / HTTPS）</label><input id="nodeBaseUrl" name="baseUrl" placeholder="http://104.233.209.110:32666 或 https://panel.example.com" required></div><div class="field"><label>1Panel API Key</label><input name="apiKey" type="password" autocomplete="off" required></div><button type="submit" class="primary">测试连接并保存</button></form><div id="nodeMsg"></div><div class="notice">支持 HTTP 和 HTTPS，也支持 IP 地址。若 Worker 无法直连 IP，会引导你到 DNS 记录页面创建 DNS-only A 记录，再返回此处使用域名连接。HTTP 不加密 API Key 和请求内容，建议仅临时使用并尽快配置 HTTPS。</div></div><div class="card"><h3>已保存的 VPS 节点</h3><div id="nodeList" class="muted">加载中...</div></div></section>
 <section id="dns" class="tab hidden grid">
 <div id="panelDnsAssist" class="card hidden"><h3>为 1Panel 创建管理地址 DNS</h3><div id="panelDnsAssistText" class="notice"></div><div class="muted" style="margin:8px 0">已自动带入 VPS 公网 IP。选择 Cloudflare 凭据和 Zone，填写记录前缀后创建 A 记录；请保持 DNS Only（灰色云）。</div></div>
 <div class="card"><h3>Cloudflare DNS 记录</h3>
-<div class="field"><label>Cloudflare 凭据</label><select id="dnsCredential" style="width:100%;padding:10px;background:#0c1424;color:var(--text);border:1px solid var(--line);border-radius:9px"></select></div>
-<div class="field"><label>域名 Zone</label><select id="dnsZone" style="width:100%;padding:10px;background:#0c1424;color:var(--text);border:1px solid var(--line);border-radius:9px"></select></div>
+<div class="field"><label>Cloudflare 凭据</label><select id="dnsCredential"></select></div>
+<div class="field"><label>域名 Zone</label><select id="dnsZone"></select></div>
 <button id="loadDns" class="primary">读取 DNS 记录</button><div id="dnsMsg"></div><div id="dnsList" class="muted" style="margin-top:12px">请选择账号和域名</div></div>
 <div class="card"><h3>新增 DNS 记录</h3><form id="dnsForm">
-<div class="field"><label>类型</label><select name="type" style="width:100%;padding:10px;background:#0c1424;color:var(--text);border:1px solid var(--line);border-radius:9px"><option>A</option><option>AAAA</option><option>CNAME</option><option>TXT</option></select></div>
+<div class="field"><label>类型</label><select name="type"><option>A</option><option>AAAA</option><option>CNAME</option><option>TXT</option></select></div>
 <div class="field"><label>记录名称（可填写 @ 或完整域名）</label><input name="name" placeholder="app" required></div>
 <div class="field"><label>记录内容</label><input name="content" placeholder="IPv4 / IPv6 / 目标域名 / TXT 内容" required></div>
 <div class="field"><label>TTL（1 表示自动）</label><input name="ttl" type="number" min="1" value="1"></div>
@@ -1032,10 +1111,10 @@ const PAGE = `<!doctype html>
 <button class="primary">创建 DNS 记录</button></form><div id="dnsCreateMsg"></div></div></section><section id="publish" class="tab hidden grid">
 <div class="card"><h3>一键接入域名</h3><p class="muted">自动创建 DNS A 记录、配置 1Panel Cloudflare DNS-01 账户、申请 Let's Encrypt 证书，并创建 HTTPS 反向代理网站。</p>
 <form id="publishForm">
-<div class="field"><label>Cloudflare 凭据</label><select id="publishCredential" name="credentialId" required style="width:100%;padding:10px;background:#0c1424;color:var(--text);border:1px solid var(--line);border-radius:9px"></select></div>
-<div class="field"><label>域名 Zone</label><select id="publishZone" name="zoneId" required style="width:100%;padding:10px;background:#0c1424;color:var(--text);border:1px solid var(--line);border-radius:9px"></select></div>
+<div class="field"><label>Cloudflare 凭据</label><select id="publishCredential" name="credentialId" required></select></div>
+<div class="field"><label>域名 Zone</label><select id="publishZone" name="zoneId" required></select></div>
 <div class="field"><label>完整域名</label><input name="hostname" placeholder="app.example.com" required></div>
-<div class="field"><label>1Panel VPS 节点</label><select id="publishNode" name="nodeId" required style="width:100%;padding:10px;background:#0c1424;color:var(--text);border:1px solid var(--line);border-radius:9px"></select></div>
+<div class="field"><label>1Panel VPS 节点</label><select id="publishNode" name="nodeId" required></select></div>
 <div class="field"><label>后端服务地址</label><input name="upstream" placeholder="http://127.0.0.1:3000" required></div>
 <div class="field"><label>Let's Encrypt 联系邮箱</label><input name="email" type="email" placeholder="admin@example.com" required></div>
 <div class="field"><label>服务器 IPv4（自动读取失败时填写）</label><input name="ipv4" placeholder="自动读取 1Panel 节点公网 IPv4"></div>
@@ -1054,19 +1133,42 @@ const PAGE = `<!doctype html>
  </div>
 </section>
 <div id="tunnelModalBackdrop" class="tunnel-modal-backdrop"></div>
-<div id="tunnelModal" class="tunnel-modal" role="dialog" aria-modal="true"><div class="tunnel-modal-head"><div><h3>新建 Cloudflare Tunnel</h3><p class="muted">创建隧道并设置第一条入口路由。</p></div><button type="button" class="tunnel-modal-close" data-close-modal>×</button></div>
- <form id="tunnelForm"><div class="field"><label>隧道名称</label><input name="name" placeholder="例如：aws-jp" required maxlength="64"></div>
- <div class="field"><label>域名 Zone</label><select name="zoneId" id="tunnelCreateZone" required></select></div>
- <div class="field"><label>子域名前缀（留空使用主域名）</label><input name="sub" placeholder="例如：app"></div>
- <div class="field"><label>入口路径（可选）</label><input name="path" placeholder="/api，留空匹配全部"></div>
- <div class="field"><label>后端服务地址</label><input name="service" placeholder="http://localhost:3000" required></div>
- <div class="notice">创建后需要在 VPS 上运行 cloudflared 连接器。Token 可在列表中单独复制。</div>
- <div class="tunnel-modal-actions"><button type="button" data-close-modal>取消</button><button type="submit" class="primary" id="createTunnelButton">创建隧道</button></div></form></div>
-<div id="tunnelEditModal" class="tunnel-modal" role="dialog" aria-modal="true"><div class="tunnel-modal-head"><div><h3>编辑隧道</h3><p class="muted">修改 Tunnel 名称；入口配置请在路由管理中编辑。</p></div><button type="button" class="tunnel-modal-close" data-close-modal>×</button></div><form id="tunnelEditForm"><input type="hidden" name="id"><div class="field"><label>隧道名称</label><input name="name" required maxlength="64"></div><div class="tunnel-modal-actions"><button type="button" data-close-modal>取消</button><button class="primary">保存</button></div></form></div>
+<div id="tunnelModal" class="tunnel-modal" role="dialog" aria-modal="true">
+ <div class="tunnel-modal-head"><div><h3>新建 Cloudflare Tunnel</h3><p>创建隧道并设置第一条入口路由。</p></div><button type="button" class="tunnel-modal-close" data-close-modal aria-label="关闭">×</button></div>
+ <form id="tunnelForm">
+  <div class="field"><label>隧道名称</label><input name="name" placeholder="例如：aws-jp" required maxlength="64"></div>
+  <div class="field"><label>公开域名</label><div class="field-row"><input name="sub" placeholder="子域名（留空使用主域名）"><select name="zoneId" id="tunnelCreateZone" required></select></div></div>
+  <div class="field"><label>路径（可选）</label><input name="path" placeholder="例如 /api 或 ^/ws，留空匹配全部"></div>
+  <div class="field"><label>本地服务地址</label><input name="service" placeholder="http://localhost:3000 或 tcp://localhost:3389" required></div>
+  <div class="preview" id="tunnelCreatePreview"></div>
+  <div class="notice">创建后需要在 VPS 上启动 cloudflared 连接器。Token 可在列表中单独查看和复制。</div>
+  <div class="tunnel-modal-actions"><button type="button" data-close-modal>取消</button><button type="submit" class="primary" id="createTunnelButton">创建隧道</button></div>
+ </form>
+</div>
+<div id="tunnelEditModal" class="tunnel-modal" role="dialog" aria-modal="true">
+ <div class="tunnel-modal-head"><div><h3>编辑隧道</h3><p>修改隧道名称、公开域名、路径和后端服务。</p></div><button type="button" class="tunnel-modal-close" data-close-modal aria-label="关闭">×</button></div>
+ <div id="tunnelEditNote" class="notice">读取配置中...</div>
+ <form id="tunnelEditForm">
+  <input type="hidden" name="id"><input type="hidden" name="oldHostname"><input type="hidden" name="oldPath">
+  <div class="field"><label>隧道名称</label><input name="name" required maxlength="64"></div>
+  <div id="tunnelEditRoutePicker" class="field hidden"><label>正在编辑的路由</label><select name="routeIndex" id="tunnelEditRouteSelect"></select></div>
+  <div class="field"><label>公开域名</label><div class="field-row"><input name="sub" placeholder="子域名（留空使用主域名）"><select name="zoneId" id="tunnelEditZone" required></select></div></div>
+  <div class="field"><label>路径（可选）</label><input name="path" placeholder="例如 /api 或 ^/ws，留空匹配全部"></div>
+  <div class="field"><label>本地服务地址</label><input name="service" placeholder="http://localhost:3000 或 tcp://localhost:3389" required></div>
+  <div class="preview" id="tunnelEditPreview"></div>
+  <div class="tunnel-modal-actions"><button type="button" data-close-modal>取消</button><button type="submit" class="primary" id="saveTunnelEdit">保存修改</button></div>
+ </form>
+</div>
 <div id="tunnelTokenModal" class="tunnel-modal" role="dialog" aria-modal="true"><div class="tunnel-modal-head"><div><h3>Tunnel Token</h3><p class="muted" id="tunnelTokenName"></p></div><button type="button" class="tunnel-modal-close" data-close-modal>×</button></div><div id="tunnelTokenFields"></div></div>
-<div id="tunnelRoutesModal" class="tunnel-modal" role="dialog" aria-modal="true"><div class="tunnel-modal-head"><div><h3 id="tunnelRoutesTitle">路由管理</h3><p class="muted">一个 Tunnel 可以配置多个域名和路径，每条路由指向一个后端服务。</p></div><button type="button" class="tunnel-modal-close" data-close-modal>×</button></div><div id="tunnelRoutesList"></div><form id="tunnelRouteForm"><input type="hidden" name="operation" value="add"><input type="hidden" name="oldHostname"><input type="hidden" name="oldPath"><div class="field"><label>域名 Zone</label><select name="zoneId" id="tunnelRouteZone"></select></div><div class="field"><label>子域名前缀</label><input name="sub" placeholder="例如 api；留空使用主域名"></div><div class="field"><label>路径（可选）</label><input name="path" placeholder="/api"></div><div class="field"><label>后端服务地址</label><input name="service" placeholder="http://localhost:3000" required></div><div class="tunnel-modal-actions"><button type="button" id="cancelRouteEdit" class="hidden">取消编辑</button><button class="primary" id="saveTunnelRoute">添加路由</button></div></form></div>
-<section id="logs" class="tab hidden"><div class="card"><h3>最近操作</h3><div id="logList">加载中...</div></div></section></div>
-<script>
+<div id="tunnelRoutesModal" class="tunnel-modal" role="dialog" aria-modal="true"><div class="tunnel-modal-head"><div><h3 id="tunnelRoutesTitle">路由管理</h3><p class="muted">一个 Tunnel 可以配置多个域名和路径，每条路由指向一个后端服务。</p></div><button type="button" class="tunnel-modal-close" data-close-modal>×</button></div><div id="tunnelRoutesList"></div><form id="tunnelRouteForm">
+ <input type="hidden" name="operation" value="add"><input type="hidden" name="oldHostname"><input type="hidden" name="oldPath">
+ <div class="field"><label>公开域名</label><div class="field-row"><input name="sub" placeholder="子域名（留空使用主域名）"><select name="zoneId" id="tunnelRouteZone"></select></div></div>
+ <div class="field"><label>路径（可选）</label><input name="path" placeholder="/api"></div>
+ <div class="field"><label>本地服务地址</label><input name="service" placeholder="http://localhost:3000" required></div>
+ <div class="preview" id="tunnelRoutePreview"></div>
+ <div class="tunnel-modal-actions"><button type="button" id="cancelRouteEdit" class="hidden">取消编辑</button><button class="primary" id="saveTunnelRoute">添加路由</button></div>
+</form></div>
+<section id="logs" class="tab hidden"><div class="card"><h3>最近操作</h3><div id="logList">加载中...</div></div></section></div><script>
 const $=s=>document.querySelector(s);const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 async function api(path,opts={}){const r=await fetch(path,{...opts,headers:{"content-type":"application/json",...(opts.headers||{})}});const d=await r.json().catch(()=>({error:"服务器响应无法解析"}));if(r.status===401){showLogin();throw new Error(d.error||"登录已过期")}if(!r.ok)throw new Error(d.error||"请求失败");return d}
 function msg(el,text,bad=false){el.innerHTML='<div class="notice '+(bad?'error':'')+'">'+esc(text)+'</div>'}
