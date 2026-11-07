@@ -119,13 +119,13 @@ function safeName(value) {
 function safeBaseUrl(value) {
   const url = new URL(String(value || ""));
   if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) throw new Error("1Panel 地址必须使用 HTTPS，且不能包含用户名、密码、查询参数或片段");
-  return url.origin + url.pathname.replace(/\\/+$/, "");
+  return url.origin + url.pathname.replace(/\/+$/, "");
 }
 async function panelRequest(baseUrl, apiKey, method, apiPath, body) {
   const timestamp = Math.floor(Date.now() / 1000).toString();
   const signature = await hmac("1panel:" + timestamp, apiKey);
   const token = Array.from(signature, b => b.toString(16).padStart(2, "0")).join("");
-  const url = baseUrl.replace(/\\/+$/, "") + "/api/v2" + apiPath;
+  const url = baseUrl.replace(/\/+$/, "") + "/api/v2" + apiPath;
   const response = await fetch(url, {
     method,
     headers: {
@@ -153,8 +153,8 @@ function isIPv4(value) {
   return parts.length === 4 && parts.every(p => /^\\d{1,3}$/.test(p) && Number(p) >= 0 && Number(p) <= 255);
 }
 function normalizeHostname(value, zoneName) {
-  const hostname = String(value || "").trim().toLowerCase().replace(/\\.$/, "");
-  if (!/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$/.test(hostname)) throw new Error("请输入有效的完整域名");
+  const hostname = String(value || "").trim().toLowerCase().replace(/\.$/, "");
+  if (!/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(hostname)) throw new Error("请输入有效的完整域名");
   if (hostname !== zoneName && !hostname.endsWith("." + zoneName)) throw new Error("域名必须属于所选 Cloudflare Zone：" + zoneName);
   return hostname;
 }
@@ -162,7 +162,7 @@ function normalizeUpstream(value) {
   const raw = String(value || "").trim();
   const url = new URL(raw);
   if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error("反向代理地址必须是 http:// 或 https:// 地址，且不能包含账号、查询参数或片段");
-  return url.origin + url.pathname.replace(/\\/$/, "");
+  return url.origin + url.pathname.replace(/\/$/, "");
 }
 async function panelPageItems(baseUrl, apiKey, path, body) {
   const data = await panelRequest(baseUrl, apiKey, "POST", path, body || { page: 1, pageSize: 100 });
@@ -370,7 +370,7 @@ async function api(request, env, path) {
     const {results}=await env.DOMAIN_DB.prepare("SELECT id,hostname,status,last_error,metadata_json,created_at,updated_at FROM managed_sites ORDER BY created_at DESC LIMIT 100").all();
     return json({items:results.map(x=>({id:x.id,hostname:x.hostname,status:x.status,lastError:x.last_error,metadata:JSON.parse(x.metadata_json||"{}"),createdAt:x.created_at,updatedAt:x.updated_at}))});
   }
-  const publishProgress = path.match(/^\\/api\\/publish\\/([0-9a-f-]+)\\/progress$/);
+  const publishProgress = path.match(/^\/api\/publish\/([0-9a-f-]+)\/progress$/);
   if (publishProgress && request.method === "POST") {
     const id=publishProgress[1];
     const site=await env.DOMAIN_DB.prepare("SELECT * FROM managed_sites WHERE id=?").bind(id).first();
@@ -441,7 +441,7 @@ async function api(request, env, path) {
     const ttl = Number(body.ttl || 1);
     const proxied = Boolean(body.proxied);
     if (!credentialId || !zoneId || !name || !content || !["A","AAAA","CNAME","TXT"].includes(type)) return json({ error: "请填写有效的 DNS 记录信息" }, 400);
-    if (type === "A" && !/^\\d{1,3}(\\.\\d{1,3}){3}$/.test(content)) return json({ error: "A 记录必须填写 IPv4 地址" }, 400);
+    if (type === "A" && !/^\d{1,3}(\.\d{1,3}){3}$/.test(content)) return json({ error: "A 记录必须填写 IPv4 地址" }, 400);
     if (type === "AAAA" && !content.includes(":")) return json({ error: "AAAA 记录必须填写 IPv6 地址" }, 400);
     if (type === "CNAME" && proxied && !content) return json({ error: "CNAME 目标不能为空" }, 400);
     const row = await env.DOMAIN_DB.prepare("SELECT token_ciphertext,zones_json FROM cloudflare_credentials WHERE id=?").bind(credentialId).first();
