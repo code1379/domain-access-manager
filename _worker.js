@@ -491,7 +491,7 @@ const PAGE = `<!doctype html>
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button,input{font:inherit}button{cursor:pointer;border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:9px;padding:9px 13px}button.primary{background:#2767c8;border-color:#3478dc}button.danger{color:#ff9999}input{width:100%;padding:11px 12px;background:#0c1424;border:1px solid var(--line);border-radius:9px;color:var(--text);outline:none}input:focus{border-color:var(--accent)}.wrap{max-width:1120px;margin:auto;padding:28px 22px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}.brand{font-size:19px;font-weight:700}.muted{color:var(--muted)}.tabs{display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap}.tabs button.active{background:#1e3d68;border-color:#477fc8}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:15px}.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px}.card h3{margin:0 0 14px;font-size:16px}.field{margin:12px 0}.field label{display:block;margin-bottom:6px;color:var(--muted);font-size:12px}.actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.item{padding:14px 0;border-top:1px solid var(--line)}.item:first-child{border-top:0}.row{display:flex;justify-content:space-between;gap:12px;align-items:center}.pill{font-size:11px;color:var(--green);background:#16382e;padding:3px 8px;border-radius:20px}.pill.bad{color:#ff9d9d;background:#3a2228}.zone{display:inline-block;border:1px solid var(--line);border-radius:20px;padding:3px 8px;margin:5px 4px 0 0;font-size:11px;color:var(--muted)}.hidden{display:none!important}.notice{padding:10px 12px;border-radius:9px;background:#1a2b43;color:#a9caff;margin:12px 0}.error{background:#3b2027;color:#ffaaaa}.login{max-width:390px;margin:12vh auto;padding:26px}.login h1{margin:0 0 5px}.empty{padding:22px;text-align:center;color:var(--muted)}small{color:var(--muted)}@media(max-width:600px){.wrap{padding:18px 13px}.top{align-items:flex-start}.row{align-items:flex-start}}
 </style></head><body><div id="login" class="card login"><h1>Domain Access Manager</h1><p class="muted">Cloudflare DNS · 1Panel · Reverse Proxy</p><form id="loginForm"><div class="field"><label>管理员密码</label><input name="password" type="password" required autofocus autocomplete="current-password"></div><button class="primary" style="width:100%">登录</button></form><div id="loginMsg"></div></div>
 <div id="app" class="wrap hidden"><header class="top"><div><div class="brand">Domain Access Manager</div><small>Cloudflare DNS & 1Panel 管理</small></div><button id="logout">退出登录</button></header>
-<nav class="tabs"><button data-tab="overview" class="active">概览</button><button data-tab="cloudflare">Cloudflare</button><button data-tab="nodes">VPS / 1Panel</button><button data-tab="dns">DNS 记录</button><button data-tab="logs">操作记录</button></nav>
+<nav class="tabs"><button data-tab="overview" class="active">概览</button><button data-tab="cloudflare">Cloudflare</button><button data-tab="nodes">VPS / 1Panel</button><button data-tab="dns">DNS 记录</button><button data-tab="publish">域名接入</button><button data-tab="logs">操作记录</button></nav>
 <section id="overview" class="tab grid"><div class="card"><h3>Cloudflare 凭据</h3><div id="countCf">-</div><small>多个 Token，自动发现 Zone</small></div><div class="card"><h3>1Panel 节点</h3><div id="countNodes">-</div><small>多个 VPS，独立 API 凭据</small></div><div class="card"><h3>下一步</h3><p class="muted">先添加 Cloudflare Token 和 1Panel 节点，随后即可建设 DNS → SSL → 反向代理的一键发布流程。</p></div></section>
 <section id="cloudflare" class="tab hidden grid"><div class="card"><h3>添加 Cloudflare 凭据</h3><form id="cfForm"><div class="field"><label>配置名称</label><input name="name" placeholder="例如：个人域名" required></div><div class="field"><label>API Token</label><input name="token" type="password" autocomplete="off" required></div><button class="primary">验证 Token 并自动获取域名</button></form><div id="cfMsg"></div></div><div class="card"><h3>已保存的 Cloudflare 账号</h3><div id="cfList" class="muted">加载中...</div></div></section>
 <section id="nodes" class="tab hidden grid"><div class="card"><h3>添加 1Panel 节点</h3><form id="nodeForm"><div class="field"><label>节点名称</label><input name="name" placeholder="例如：日本 VPS" required></div><div class="field"><label>1Panel HTTPS 地址</label><input name="baseUrl" placeholder="https://panel.example.com:端口" required></div><div class="field"><label>1Panel API Key</label><input name="apiKey" type="password" autocomplete="off" required></div><button class="primary">测试连接并保存</button></form><div id="nodeMsg"></div><div class="notice">请确保 1Panel API 可从 Worker 网络通过 HTTPS 访问。建议使用 Cloudflare Access Service Auth 或 IP 白名单保护面板。</div></div><div class="card"><h3>已保存的 VPS 节点</h3><div id="nodeList" class="muted">加载中...</div></div></section>
@@ -506,14 +506,27 @@ const PAGE = `<!doctype html>
 <div class="field"><label>记录内容</label><input name="content" placeholder="IPv4 / IPv6 / 目标域名 / TXT 内容" required></div>
 <div class="field"><label>TTL（1 表示自动）</label><input name="ttl" type="number" min="1" value="1"></div>
 <div class="field"><label><input name="proxied" type="checkbox" style="width:auto"> Cloudflare 代理（橙色云）</label></div>
-<button class="primary">创建 DNS 记录</button></form><div id="dnsCreateMsg"></div></div></section><section id="logs" class="tab hidden"><div class="card"><h3>最近操作</h3><div id="logList">加载中...</div></div></section></div>
+<button class="primary">创建 DNS 记录</button></form><div id="dnsCreateMsg"></div></div></section><section id="publish" class="tab hidden grid">
+<div class="card"><h3>一键接入域名</h3><p class="muted">自动创建 DNS A 记录、配置 1Panel Cloudflare DNS-01 账户、申请 Let's Encrypt 证书，并创建 HTTPS 反向代理网站。</p>
+<form id="publishForm">
+<div class="field"><label>Cloudflare 凭据</label><select id="publishCredential" name="credentialId" required style="width:100%;padding:10px;background:#0c1424;color:var(--text);border:1px solid var(--line);border-radius:9px"></select></div>
+<div class="field"><label>域名 Zone</label><select id="publishZone" name="zoneId" required style="width:100%;padding:10px;background:#0c1424;color:var(--text);border:1px solid var(--line);border-radius:9px"></select></div>
+<div class="field"><label>完整域名</label><input name="hostname" placeholder="app.example.com" required></div>
+<div class="field"><label>1Panel VPS 节点</label><select id="publishNode" name="nodeId" required style="width:100%;padding:10px;background:#0c1424;color:var(--text);border:1px solid var(--line);border-radius:9px"></select></div>
+<div class="field"><label>后端服务地址</label><input name="upstream" placeholder="http://127.0.0.1:3000" required></div>
+<div class="field"><label>Let's Encrypt 联系邮箱</label><input name="email" type="email" placeholder="admin@example.com" required></div>
+<div class="field"><label>服务器 IPv4（自动读取失败时填写）</label><input name="ipv4" placeholder="自动读取 1Panel 节点公网 IPv4"></div>
+<div class="field"><label><input name="proxied" type="checkbox" checked style="width:auto"> 开启 Cloudflare 橙色云代理</label></div>
+<button class="primary" id="publishButton">开始一键接入</button>
+</form><div id="publishMsg"></div></div>
+<div class="card"><h3>域名接入任务</h3><button id="refreshPublish">刷新任务</button><div id="publishList" style="margin-top:12px">加载中...</div></div></section><section id="logs" class="tab hidden"><div class="card"><h3>最近操作</h3><div id="logList">加载中...</div></div></section></div>
 <script>
 const $=s=>document.querySelector(s);const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 async function api(path,opts={}){const r=await fetch(path,{...opts,headers:{"content-type":"application/json",...(opts.headers||{})}});const d=await r.json().catch(()=>({error:"服务器响应无法解析"}));if(r.status===401){showLogin();throw new Error(d.error||"登录已过期")}if(!r.ok)throw new Error(d.error||"请求失败");return d}
 function msg(el,text,bad=false){el.innerHTML='<div class="notice '+(bad?'error':'')+'">'+esc(text)+'</div>'}
 function showLogin(){$("#login").classList.remove("hidden");$("#app").classList.add("hidden")}
 function showApp(){$("#login").classList.add("hidden");$("#app").classList.remove("hidden");refresh()}
-async function refresh(){await Promise.all([loadCf(),loadNodes(),loadLogs()]);try{await loadDnsCredentials()}catch(e){}}
+async function refresh(){await Promise.all([loadCf(),loadNodes(),loadLogs()]);try{await loadDnsCredentials();await loadPublishOptions();await loadPublishList()}catch(e){}}
 document.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{document.querySelectorAll("[data-tab]").forEach(x=>x.classList.toggle("active",x===b));document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("hidden",x.id!==b.dataset.tab))});
 $("#loginForm").onsubmit=async e=>{e.preventDefault();const p=new FormData(e.target).get("password");try{await api("/api/login",{method:"POST",body:JSON.stringify({password:p})});e.target.reset();$("#loginMsg").innerHTML="";showApp()}catch(err){msg($("#loginMsg"),err.message,true)}};
 $("#logout").onclick=async()=>{await api("/api/logout",{method:"POST",body:"{}"});showLogin()};
@@ -526,6 +539,45 @@ function updateDnsZones(){const d=$("#dnsCredential").selectedOptions[0];const c
 async function loadDns(){try{const cred=$("#dnsCredential").value,zone=$("#dnsZone").value;if(!cred||!zone)throw new Error("请先添加 Cloudflare 凭据并选择域名");const d=await api("/api/dns/records?credentialId="+encodeURIComponent(cred)+"&zoneId="+encodeURIComponent(zone));$("#dnsList").innerHTML=d.items.length?d.items.map(x=>'<div class="item"><div class="row"><b>'+esc(x.name)+'</b><button class="danger" data-dns-del="'+esc(x.id)+'">删除</button></div><small>'+esc(x.type)+' · '+esc(x.content)+' · TTL '+esc(x.ttl)+(x.proxied?' · 代理开启':'')+'</small></div>').join(""):'<div class="empty">该域名暂无 DNS 记录</div>';document.querySelectorAll("[data-dns-del]").forEach(b=>b.onclick=async()=>{if(confirm("确定删除这条 DNS 记录？")){try{await api("/api/dns/records/"+b.dataset.dnsDel,{method:"DELETE",body:JSON.stringify({credentialId:cred,zoneId:zone})});await loadDns()}catch(e){alert(e.message)}}})}catch(e){msg($("#dnsMsg"),e.message,true)}}
 $("#loadDns").onclick=loadDns;
 $("#dnsForm").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{const d=await api("/api/dns/records",{method:"POST",body:JSON.stringify({credentialId:$("#dnsCredential").value,zoneId:$("#dnsZone").value,type:f.get("type"),name:f.get("name"),content:f.get("content"),ttl:Number(f.get("ttl")||1),proxied:f.get("proxied")==="on"})});msg($("#dnsCreateMsg"),"DNS 记录已创建："+d.item.name);e.target.reset();await loadDns()}catch(err){msg($("#dnsCreateMsg"),err.message,true)}};
+async function loadPublishOptions(){
+ const [cf,nodes]=await Promise.all([api("/api/cloudflare"),api("/api/nodes")]);
+ window.__publishCf=cf.items;window.__publishNodes=nodes.items;
+ $("#publishCredential").innerHTML=cf.items.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.name)+'</option>').join("");
+ updatePublishZones();
+ $("#publishCredential").onchange=updatePublishZones;
+ $("#publishNode").innerHTML=nodes.items.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.name)+' · '+esc(x.connection_status)+'</option>').join("");
+}
+function updatePublishZones(){
+ const cred=$("#publishCredential").value;
+ const item=(window.__publishCf||[]).find(x=>x.id===cred);
+ $("#publishZone").innerHTML=(item?.zones||[]).map(z=>'<option value="'+esc(z.id)+'">'+esc(z.name)+'</option>').join("");
+}
+async function loadPublishList(){
+ try{const d=await api("/api/publish");$("#publishList").innerHTML=d.items.length?d.items.map(x=>'<div class="item"><div class="row"><b>'+esc(x.hostname)+'</b><span class="pill '+(x.status==="ready"?"":x.status==="failed"?"bad":"")+'">'+esc(x.status)+'</span></div><small>'+esc(x.lastError||x.metadata?.stage||"")+' · '+esc(x.updatedAt)+'</small><div class="actions" style="margin-top:8px">'+(x.status==="certificate_pending"||x.status==="provisioning"?'<button data-progress="'+esc(x.id)+'">检查进度</button>':'')+'</div></div>').join(""):'<div class="empty">尚未接入域名</div>';document.querySelectorAll("[data-progress]").forEach(b=>b.onclick=()=>checkPublishProgress(b.dataset.progress,true))}catch(e){$("#publishList").textContent=e.message}
+}
+async function checkPublishProgress(id,showMessage){
+ try{const d=await api("/api/publish/"+id+"/progress",{method:"POST",body:"{}"});const item=d.item||{};if(showMessage)msg($("#publishMsg"),item.status==="ready"?"域名接入完成："+item.hostname:(item.message||"当前状态："+item.status));await loadPublishList();return item}catch(e){if(showMessage)msg($("#publishMsg"),e.message,true);await loadPublishList();return {status:"failed",error:e.message}}
+}
+async function runPublishPolling(id){
+ for(let i=0;i<45;i++){
+  await new Promise(resolve=>setTimeout(resolve,8000));
+  const item=await checkPublishProgress(id,false);
+  if(item.status==="ready"){msg($("#publishMsg"),"域名接入成功："+item.hostname);return}
+  if(item.status==="failed"){msg($("#publishMsg"),item.error||"接入失败，请查看任务记录",true);return}
+  msg($("#publishMsg"),"证书申请中，已等待 "+((i+1)*8)+" 秒；可以关闭页面，稍后在任务列表继续检查");
+ }
+ msg($("#publishMsg"),"证书仍在申请中。任务已保存，可稍后点击「检查进度」继续。");
+}
+$("#publishForm").onsubmit=async e=>{
+ e.preventDefault();const f=new FormData(e.target);const b=$("#publishButton");b.disabled=true;b.textContent="正在配置 DNS 和证书...";
+ try{
+  const d=await api("/api/publish",{method:"POST",body:JSON.stringify({credentialId:f.get("credentialId"),zoneId:f.get("zoneId"),nodeId:f.get("nodeId"),hostname:f.get("hostname"),upstream:f.get("upstream"),email:f.get("email"),ipv4:f.get("ipv4"),proxied:f.get("proxied")==="on"})});
+  msg($("#publishMsg"),"DNS 已处理，1Panel 已提交证书申请。正在等待签发...");
+  await loadPublishList();runPublishPolling(d.item.id);
+ }catch(err){msg($("#publishMsg"),err.message,true);await loadPublishList()}
+ finally{b.disabled=false;b.textContent="开始一键接入"}
+};
+$("#refreshPublish").onclick=loadPublishList;
 async function loadLogs(){try{const d=await api("/api/logs");$("#logList").innerHTML=d.items.length?d.items.map(x=>'<div class="item"><div class="row"><b>'+esc(x.operation)+'</b><span class="pill '+(x.status==="success"?"":"bad")+'">'+esc(x.status)+'</span></div><small>'+esc(x.created_at)+' · '+esc(x.message)+'</small></div>').join(""):'<div class="empty">暂无操作记录</div>'}catch(e){$("#logList").textContent=e.message}}
 api("/api/me").then(showApp).catch(showLogin);
 </script></body></html>`;
