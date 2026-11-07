@@ -159,7 +159,7 @@ async function panelSocketRequest(baseUrl, method, apiPath, headers, body) {
   );
   try {
     await socket.opened;
-    const path = (target.pathname.replace(/\\/+$/, "") || "") + "/api/v2" + apiPath;
+    const path = target.pathname.replace(/\/+$/, "") + "/api/v2" + apiPath;
     const host = target.host;
     const bodyText = body === undefined ? "" : JSON.stringify(body);
     const requestHeaders = {
@@ -200,8 +200,8 @@ async function panelSocketRequest(baseUrl, method, apiPath, headers, body) {
     if (split < 0) throw new Error("1Panel returned an invalid HTTP response");
     const headerTextResponse = new TextDecoder().decode(rawBytes.slice(0, split));
     const lines = headerTextResponse.split("\r\n");
-    const statusMatch = lines[0].match(/^HTTP\\/\\d(?:\\.\\d)?\\s+(\\d{3})/);
-    if (!statusMatch) throw new Error("1Panel returned an invalid HTTP status line");
+    const status = Number((lines[0].split(/\s+/)[1] || "").trim());
+    if (!Number.isInteger(status) || status < 100 || status > 599) throw new Error("1Panel returned an invalid HTTP status line");
     const status = Number(statusMatch[1]);
     const responseHeaders = {};
     for (const line of lines.slice(1)) {
