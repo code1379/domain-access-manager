@@ -618,7 +618,7 @@ const PAGE = `<!doctype html>
 <div class="field"><label>后端服务地址</label><input name="upstream" placeholder="http://127.0.0.1:3000" required></div>
 <div class="field"><label>Let's Encrypt 联系邮箱</label><input name="email" type="email" placeholder="admin@example.com" required></div>
 <div class="field"><label>服务器 IPv4（自动读取失败时填写）</label><input name="ipv4" placeholder="自动读取 1Panel 节点公网 IPv4"></div>
-<div class="field"><label><input name="proxied" type="checkbox" checked style="width:auto"> 开启 Cloudflare 橙色云代理</label></div>
+<div class="field"><label><input name="proxied" type="checkbox" style="width:auto"> 开启 Cloudflare 橙色云代理</label></div>
 <button class="primary" id="publishButton">开始一键接入</button>
 </form><div id="publishMsg"></div></div>
 <div class="card"><h3>域名接入任务</h3><button id="refreshPublish">刷新任务</button><div id="publishList" style="margin-top:12px">加载中...</div></div></section><section id="logs" class="tab hidden"><div class="card"><h3>最近操作</h3><div id="logList">加载中...</div></div></section></div>
