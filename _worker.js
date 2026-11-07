@@ -437,7 +437,7 @@ async function api(request, env, path) {
         const group=groups.find(x=>x.isDefault)||groups[0];
         if(!group?.id) throw new Error("1Panel 没有可用的网站分组，无法创建反向代理网站");
         const alias=site.hostname.replace(/[^a-z0-9.-]/g,"-").replace(/\\./g,"-").slice(0,60);
-        const existing=await panelPageItems(node.base_url,apiKey,"/websites/search",{page:1,pageSize:100});
+        const existing=await panelPageItems(node.base_url,apiKey,"/websites/search",{page:1,pageSize:100,orderBy:"created_at",order:"descending"});
         const matched=existing.find(x=>x.primaryDomain===site.hostname||x.alias===alias);
         if(matched?.id) throw new Error("1Panel 已存在同名网站（ID "+matched.id+"），为避免接管或覆盖，本工具停止自动创建");
         const taskId=randomId();
@@ -445,7 +445,7 @@ async function api(request, env, path) {
           type:"proxy",alias,remark:"Created by Domain Access Manager",proxy:site.upstream_url,webSiteGroupID:Number(group.id),IPV6:false,
           domains:[{domain:site.hostname,port:80,ssl:false}],enableSSL:true,websiteSSLID:Number(meta.sslId),taskID:taskId
         });
-        const created=await panelPageItems(node.base_url,apiKey,"/websites/search",{page:1,pageSize:100});
+        const created=await panelPageItems(node.base_url,apiKey,"/websites/search",{page:1,pageSize:100,orderBy:"created_at",order:"descending"});
         const website=created.find(x=>x.primaryDomain===site.hostname||x.alias===alias);
         if(!website?.id) throw new Error("1Panel 已提交网站创建任务，但暂时未能读取网站 ID；请在 1Panel 网站列表确认结果后再重试");
         meta.websiteId=Number(website.id);
