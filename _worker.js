@@ -288,7 +288,7 @@ async function api(request, env, path) {
     const apiKey = String(body.apiKey || "").trim();
     if (!apiKey || apiKey.length > 4096) return json({ error: "请填写 1Panel API Key" }, 400);
     try {
-      const info = await panelRequest(baseUrl, apiKey, "GET", "/dashboard/base/all/all");
+      const info = await panelRequest(baseUrl, apiKey, "GET", "/dashboard/base/os");
       const id = randomId();
       const encrypted = await encryptSecret(env, apiKey);
       const now = new Date().toISOString();
