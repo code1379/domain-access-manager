@@ -940,6 +940,33 @@ const PAGE = `<!doctype html>
 <style>
 :root{color-scheme:dark;--bg:#0b1020;--panel:#121a2b;--panel2:#182338;--line:#26344b;--text:#edf3ff;--muted:#93a4bd;--accent:#6aa7ff;--green:#45c58a;--red:#ff7777}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button,input{font:inherit}button{cursor:pointer;border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:9px;padding:9px 13px}button.primary{background:#2767c8;border-color:#3478dc}button.danger{color:#ff9999}input{width:100%;padding:11px 12px;background:#0c1424;border:1px solid var(--line);border-radius:9px;color:var(--text);outline:none}input:focus{border-color:var(--accent)}.wrap{max-width:1120px;margin:auto;padding:28px 22px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}.brand{font-size:19px;font-weight:700}.muted{color:var(--muted)}.tabs{display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap}.tabs button.active{background:#1e3d68;border-color:#477fc8}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:15px}.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px}.card h3{margin:0 0 14px;font-size:16px}.field{margin:12px 0}.field label{display:block;margin-bottom:6px;color:var(--muted);font-size:12px}.actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.dns-toggle{width:42px;height:24px;padding:2px;border-radius:20px;background:#3b4659;border:1px solid #52617a;display:inline-flex;align-items:center;justify-content:flex-start;transition:background .15s,border-color .15s;vertical-align:middle}.dns-toggle span{width:18px;height:18px;background:#e9eef7;border-radius:50%;display:block;transition:transform .15s}.dns-toggle[aria-checked="true"]{background:#e78a20;border-color:#f5a33c}.dns-toggle[aria-checked="true"] span{transform:translateX(18px)}.dns-toggle:disabled{opacity:.5;cursor:not-allowed}.proxy-state{font-size:11px;color:var(--muted)}.proxy-state.on{color:#ffb34d}.item{padding:14px 0;border-top:1px solid var(--line)}.item:first-child{border-top:0}.row{display:flex;justify-content:space-between;gap:12px;align-items:center}.domain-main{min-width:0;flex:1}.domain-main b{overflow-wrap:anywhere}.domain-side{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-shrink:0;white-space:nowrap}.pill{font-size:11px;color:var(--green);background:#16382e;padding:3px 8px;border-radius:20px}.pill.bad{color:#ff9d9d;background:#3a2228}.zone{display:inline-block;border:1px solid var(--line);border-radius:20px;padding:3px 8px;margin:5px 4px 0 0;font-size:11px;color:var(--muted)}.hidden{display:none!important}.notice{padding:10px 12px;border-radius:9px;background:#1a2b43;color:#a9caff;margin:12px 0}.error{background:#3b2027;color:#ffaaaa}.login{max-width:390px;margin:12vh auto;padding:26px}.login h1{margin:0 0 5px}.empty{padding:22px;text-align:center;color:var(--muted)}small{color:var(--muted)}@media(max-width:600px){.wrap{padding:18px 13px}.top{align-items:flex-start}.row{align-items:flex-start}}
+.tunnel-page-head{display:flex;justify-content:space-between;align-items:flex-end;gap:18px;flex-wrap:wrap}
+.tunnel-page-head>div:first-child{min-width:220px;flex:1}
+.tunnel-page-head p{margin:6px 0 0;max-width:650px;line-height:1.6}
+.tunnel-controls{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap}
+.tunnel-controls .field{margin:0;min-width:170px}
+.tunnel-controls select{width:100%;min-width:170px;max-width:220px;padding:10px;background:#0c1424;color:var(--text);border:1px solid var(--line);border-radius:9px}
+.tunnel-table-head,.tunnel-row{display:grid;grid-template-columns:minmax(0,1fr) 120px minmax(320px,auto);align-items:center;gap:16px}
+.tunnel-table-head{padding:11px 12px;color:var(--muted);font-size:12px;border-bottom:1px solid var(--line);font-weight:600}
+.tunnel-row{padding:14px 12px;border-bottom:1px solid var(--line);min-height:68px}
+.tunnel-row:last-child{border-bottom:0}
+.tunnel-info{min-width:0}
+.tunnel-info b{display:block;overflow-wrap:anywhere}
+.tunnel-info small{display:block;margin-top:4px;overflow-wrap:anywhere;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}
+.tunnel-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+.tunnel-actions button{white-space:nowrap}
+.tunnel-modal-backdrop{position:fixed;inset:0;z-index:100;background:rgba(5,8,16,.68);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);display:none}
+.tunnel-modal-backdrop.show{display:block}
+.tunnel-modal{position:fixed;left:50%;top:50%;transform:translate(-50%,-48%) scale(.98);z-index:101;width:min(560px,calc(100% - 28px));max-height:calc(100vh - 40px);overflow-y:auto;padding:22px;background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:0 24px 70px rgba(0,0,0,.48);display:none;opacity:0}
+.tunnel-modal.show{display:block;animation:tunnelModalIn .18s ease forwards}
+@keyframes tunnelModalIn{to{transform:translate(-50%,-50%) scale(1);opacity:1}}
+.tunnel-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:18px}
+.tunnel-modal-head h3{margin:0 0 5px}
+.tunnel-modal-head p{margin:0;font-size:13px}
+.tunnel-modal-close{font-size:24px;line-height:1;width:34px;height:34px;padding:0;display:flex;align-items:center;justify-content:center;color:var(--muted);background:transparent;border:0}
+.tunnel-modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px;padding-top:16px;border-top:1px solid var(--line)}
+@media(max-width:850px){.tunnel-controls{width:100%}.tunnel-controls .field{flex:1}.tunnel-controls select{max-width:none}}
+@media(max-width:700px){.tunnel-table-head{display:none}.tunnel-row{grid-template-columns:minmax(0,1fr) auto;gap:10px}.tunnel-row .tunnel-actions{grid-column:1/-1;justify-content:flex-start}.tunnel-controls{align-items:stretch}.tunnel-controls .field{min-width:100%;}.tunnel-modal{padding:18px}}
 </style></head><body><div id="login" class="card login"><h1>Domain Access Manager</h1><p class="muted">Cloudflare DNS · 1Panel · Reverse Proxy</p><form id="loginForm"><div class="field"><label>管理员密码</label><input name="password" type="password" required autofocus autocomplete="current-password"></div><button class="primary" style="width:100%">登录</button></form><div id="loginMsg"></div></div>
 <div id="app" class="wrap hidden"><header class="top"><div><div class="brand">Domain Access Manager</div><small>Cloudflare DNS & 1Panel 管理</small></div><button id="logout">退出登录</button></header>
 <nav class="tabs"><button data-tab="overview" class="active">概览</button><button data-tab="cloudflare">Cloudflare</button><button data-tab="nodes">VPS / 1Panel</button><button data-tab="dns">DNS 记录</button><button data-tab="publish">域名接入</button><button data-tab="domains">域名管理</button><button data-tab="tunnels">Tunnel 管理</button><button data-tab="logs">操作记录</button></nav>
@@ -971,32 +998,39 @@ const PAGE = `<!doctype html>
 <div class="field"><label><input name="proxied" type="checkbox" style="width:auto"> 开启 Cloudflare 橙色云代理</label></div>
 <button class="primary" id="publishButton">开始一键接入</button>
 </form><div id="publishMsg"></div></div>
-<div class="card"><h3>域名接入任务</h3><button id="refreshPublish">刷新任务</button><div id="publishList" style="margin-top:12px">加载中...</div></div></section><section id="domains" class="tab hidden"><div class="card"><h3>已接入域名</h3><p class="muted">统一管理通过本工具接入的域名。删除会清理本工具创建的网站、证书和 DNS 记录；共享账户及原本已存在的 DNS 记录会保留。</p><div class="actions"><button id="refreshDomains">刷新列表</button></div><div id="domainList" style="margin-top:12px">加载中...</div><div id="domainMsg"></div></div></section><section id="tunnels" class="tab hidden grid">
-<div class="card">
-<h3>Cloudflare Tunnel</h3>
-<p class="muted">复用已保存的 Cloudflare 凭据。创建 Tunnel 时自动配置入口规则和 CNAME；不会修改已有冲突 DNS 记录。</p>
-<div class="field"><label>Cloudflare 凭据</label><select id="tunnelCredential" style="width:100%;padding:10px;background:#0c1424;color:var(--text);border:1px solid var(--line);border-radius:9px"></select></div>
-<div class="field"><label>域名 Zone</label><select id="tunnelZone" style="width:100%;padding:10px;background:#0c1424;color:var(--text);border:1px solid var(--line);border-radius:9px"></select></div>
-<button id="refreshTunnels" class="primary">刷新 Tunnel 列表</button>
-<div id="tunnelMsg"></div>
-<div id="tunnelList" style="margin-top:12px">请选择 Cloudflare 凭据和 Zone</div>
+<div class="card"><h3>域名接入任务</h3><button id="refreshPublish">刷新任务</button><div id="publishList" style="margin-top:12px">加载中...</div></div></section><section id="domains" class="tab hidden"><div class="card"><h3>已接入域名</h3><p class="muted">统一管理通过本工具接入的域名。删除会清理本工具创建的网站、证书和 DNS 记录；共享账户及原本已存在的 DNS 记录会保留。</p><div class="actions"><button id="refreshDomains">刷新列表</button></div><div id="domainList" style="margin-top:12px">加载中...</div><div id="domainMsg"></div></div></section><section id="tunnels" class="tab hidden">
+  <div class="card">
+    <div class="tunnel-page-head">
+      <div><h3>Cloudflare Tunnel</h3><p class="muted">复用已保存的 Cloudflare 账户凭据，集中查看和管理隧道。创建时自动配置入口规则与 CNAME，不覆盖已有冲突 DNS 记录。</p></div>
+      <div class="tunnel-controls">
+        <div class="field"><label>Cloudflare 账户</label><select id="tunnelCredential"></select></div>
+        <div class="field"><label>域名 Zone</label><select id="tunnelZone"></select></div>
+        <button id="refreshTunnels">刷新</button>
+        <button id="openTunnelModal" class="primary">＋ 新建隧道</button>
+      </div>
+    </div>
+    <div id="tunnelMsg"></div>
+    <div class="tunnel-table-head"><span>名称 / Tunnel ID</span><span>状态</span><span>操作</span></div>
+    <div id="tunnelList"><div class="empty">请选择 Cloudflare 账户和 Zone</div></div>
+  </div>
+  <div class="card" style="margin-top:15px">
+    <h3 id="tunnelDetailTitle">Tunnel 详情与入口规则</h3>
+    <div id="tunnelDetail" class="muted">从列表选择一个 Tunnel 查看配置。</div>
+  </div>
+</section>
+<div id="tunnelModalBackdrop" class="tunnel-modal-backdrop"></div>
+<div id="tunnelModal" class="tunnel-modal" role="dialog" aria-modal="true" aria-labelledby="tunnelModalTitle">
+  <div class="tunnel-modal-head"><div><h3 id="tunnelModalTitle">新建 Cloudflare Tunnel</h3><p class="muted">创建隧道并自动添加对应的 DNS CNAME。</p></div><button type="button" id="closeTunnelModal" class="tunnel-modal-close" aria-label="关闭">×</button></div>
+  <form id="tunnelForm">
+    <div class="field"><label>隧道名称</label><input name="name" placeholder="例如：us-vps-main" required maxlength="64"></div>
+    <div class="field"><label>子域名前缀</label><input name="sub" placeholder="例如：app（将创建 app.pangu.qzz.io）" required></div>
+    <div class="field"><label>入口路径（可选）</label><input name="path" placeholder="/api 或留空"></div>
+    <div class="field"><label>后端服务地址</label><input name="service" placeholder="http://localhost:3000" required></div>
+    <div class="notice">创建后需要在运行服务的 VPS 上安装并启动 cloudflared 连接器。Tunnel Token 可在列表中查看，请妥善保管。</div>
+    <div class="tunnel-modal-actions"><button type="button" id="cancelTunnelModal">取消</button><button type="submit" class="primary" id="createTunnelButton">创建 Tunnel</button></div>
+  </form>
 </div>
-<div class="card">
-<h3>新建 Tunnel</h3>
-<form id="tunnelForm">
-<div class="field"><label>隧道名称</label><input name="name" placeholder="例如：us-vps-main" required></div>
-<div class="field"><label>子域名前缀</label><input name="sub" placeholder="例如：app（将创建 app.example.com）" required></div>
-<div class="field"><label>入口路径（可选）</label><input name="path" placeholder="/api 或留空"></div>
-<div class="field"><label>后端服务地址</label><input name="service" placeholder="http://localhost:3000" required></div>
-<button class="primary" id="createTunnelButton">创建 Tunnel</button>
-</form>
-<div class="notice">创建后请在运行服务的 VPS 上安装并启动 cloudflared 连接器。Tunnel 令牌可在列表中查看。Token 相当于隧道控制凭据，请勿公开。</div>
-</div>
-<div class="card" style="grid-column:1/-1">
-<h3 id="tunnelDetailTitle">Tunnel 详情与入口规则</h3>
-<div id="tunnelDetail" class="muted">从列表选择一个 Tunnel 查看配置。</div>
-</div>
-</section><section id="logs" class="tab hidden"><div class="card"><h3>最近操作</h3><div id="logList">加载中...</div></div></section></div>
+<section id="logs" class="tab hidden"><div class="card"><h3>最近操作</h3><div id="logList">加载中...</div></div></section></div>
 <script>
 const $=s=>document.querySelector(s);const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 async function api(path,opts={}){const r=await fetch(path,{...opts,headers:{"content-type":"application/json",...(opts.headers||{})}});const d=await r.json().catch(()=>({error:"服务器响应无法解析"}));if(r.status===401){showLogin();throw new Error(d.error||"登录已过期")}if(!r.ok)throw new Error(d.error||"请求失败");return d}
@@ -1133,9 +1167,10 @@ function updateTunnelZones(){
 async function loadTunnelList(){
  try{
   const credentialId=$("#tunnelCredential").value,zoneId=$("#tunnelZone").value;
-  if(!credentialId||!zoneId){$("#tunnelList").innerHTML='<div class="empty">请选择 Cloudflare 凭据和 Zone</div>';return}
+  if(!credentialId||!zoneId){$("#tunnelList").innerHTML='<div class="empty">请先添加账户 API Token，并选择 Zone</div>';return}
+  $("#tunnelList").innerHTML='<div class="empty">正在读取 Tunnel...</div>';
   const d=await api("/api/tunnels?credentialId="+encodeURIComponent(credentialId)+"&zoneId="+encodeURIComponent(zoneId));
-  $("#tunnelList").innerHTML=d.items.length?d.items.map(t=>'<div class="item"><div class="row"><div class="domain-main"><b>'+esc(t.name)+'</b><div><small>'+esc(t.id)+'</small></div></div><div class="domain-side"><span class="pill '+(t.status==="healthy"?"":t.status==="down"||t.status==="inactive"?"bad":"")+'">'+esc(t.status||"unknown")+'</span><button data-tunnel-detail="'+esc(t.id)+'">详情</button><button data-tunnel-token="'+esc(t.id)+'">Token</button><button data-tunnel-rename="'+esc(t.id)+'">重命名</button><button class="danger" data-tunnel-delete="'+esc(t.id)+'">删除</button></div></div></div>').join(""):'<div class="empty">当前账号和 Zone 暂无 Tunnel</div>';
+  $("#tunnelList").innerHTML=d.items.length?d.items.map(t=>'<div class="tunnel-row"><div class="tunnel-info"><b>'+esc(t.name)+'</b><small title="'+esc(t.id)+'">'+esc(t.id)+'</small></div><div><span class="pill '+(t.status==="healthy"?"":t.status==="down"||t.status==="inactive"?"bad":"")+'">'+esc(t.status||"unknown")+'</span></div><div class="tunnel-actions"><button data-tunnel-detail="'+esc(t.id)+'">详情</button><button data-tunnel-token="'+esc(t.id)+'">Token</button><button data-tunnel-rename="'+esc(t.id)+'">重命名</button><button class="danger" data-tunnel-delete="'+esc(t.id)+'">删除</button></div></div>').join(""):'<div class="empty">当前账户暂无 Tunnel</div>';
   document.querySelectorAll("[data-tunnel-detail]").forEach(b=>b.onclick=()=>loadTunnelDetail(b.dataset.tunnelDetail));
   document.querySelectorAll("[data-tunnel-token]").forEach(b=>b.onclick=()=>showTunnelToken(b.dataset.tunnelToken));
   document.querySelectorAll("[data-tunnel-rename]").forEach(b=>b.onclick=()=>renameTunnel(b.dataset.tunnelRename));
@@ -1156,18 +1191,12 @@ async function loadTunnelDetail(id){
  }catch(e){msg($("#tunnelMsg"),e.message,true)}
 }
 async function mutateTunnelRoute(action,data){
- try{
-  await api(tunnelQuery(activeTunnelId,"routes"),{method:"POST",body:JSON.stringify({action,...data})});
-  msg($("#tunnelMsg"),action==="add"?"入口规则已添加":"入口规则已删除");
-  await loadTunnelDetail(activeTunnelId);await loadTunnelList();
- }catch(e){msg($("#tunnelMsg"),e.message,true)}
+ try{await api(tunnelQuery(activeTunnelId,"routes"),{method:"POST",body:JSON.stringify({action,...data})});msg($("#tunnelMsg"),action==="add"?"入口规则已添加":"入口规则已删除");await loadTunnelDetail(activeTunnelId);await loadTunnelList()}
+ catch(e){msg($("#tunnelMsg"),e.message,true)}
 }
 async function showTunnelToken(id){
- try{
-  const d=await api(tunnelQuery(id,"token"));
-  const token=typeof d.token==="string"?d.token:JSON.stringify(d.token);
-  const value=prompt("Tunnel Token（请妥善保管，不要公开）：",token);
-  if(value!==null)await navigator.clipboard?.writeText(value).catch(()=>{});
+ try{const d=await api(tunnelQuery(id,"token"));const token=typeof d.token==="string"?d.token:JSON.stringify(d.token);
+  try{await navigator.clipboard.writeText(token);msg($("#tunnelMsg"),"Tunnel Token 已复制到剪贴板，请妥善保管")}catch{prompt("请复制并妥善保管 Tunnel Token：",token)}
  }catch(e){msg($("#tunnelMsg"),e.message,true)}
 }
 async function renameTunnel(id){
@@ -1176,12 +1205,20 @@ async function renameTunnel(id){
 }
 async function deleteTunnel(id){
  if(!confirm("确定删除这个 Cloudflare Tunnel？将删除 Tunnel 本身及其指向该 Tunnel 的 CNAME 记录。活动连接器必须先在 VPS 上停止。"))return;
- try{const d=await api(tunnelQuery(id),{method:"DELETE",body:"{}"});msg($("#tunnelMsg"),d.cleanup?.warnings?.length?"Tunnel 已删除，但 DNS 清理有警告："+d.cleanup.warnings.join("；"):"Tunnel 和关联 CNAME 已删除");if(activeTunnelId===id){activeTunnelId="";$("#tunnelDetail").textContent="从列表选择一个 Tunnel 查看配置。"}await loadTunnelList()}catch(e){msg($("#tunnelMsg"),e.message,true)}
+ try{const d=await api(tunnelQuery(id),{method:"DELETE",body:"{}"});msg($("#tunnelMsg"),d.cleanup?.warnings?.length?"Tunnel 已删除，但 DNS 清理有警告："+d.cleanup.warnings.join("；"):"Tunnel 和关联 CNAME 已删除");if(activeTunnelId===id){activeTunnelId="";$("#tunnelDetail").textContent="从列表选择一个 Tunnel 查看配置。";$("#tunnelDetailTitle").textContent="Tunnel 详情与入口规则"}await loadTunnelList()}catch(e){msg($("#tunnelMsg"),e.message,true)}
 }
+function openTunnelModal(){
+ if(!$("#tunnelCredential").value||!$("#tunnelZone").value){msg($("#tunnelMsg"),"请先选择 Cloudflare 账户和 Zone",true);return}
+ $("#tunnelModalBackdrop").classList.add("show");$("#tunnelModal").classList.add("show");document.body.style.overflow="hidden";
+ setTimeout(()=>$("#tunnelForm").elements.namedItem("name").focus(),30);
+}
+function closeTunnelModal(){$("#tunnelModalBackdrop").classList.remove("show");$("#tunnelModal").classList.remove("show");document.body.style.overflow="";}
 async function initTunnelPage(){
  try{
   const d=await api("/api/cloudflare");const items=d.items.filter(x=>x.account_id);window.__cfItems=items;
+  const oldCredential=$("#tunnelCredential").value;
   $("#tunnelCredential").innerHTML=items.length?items.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.name)+'</option>').join(""):'<option value="">请先添加账户 API Token</option>';
+  if(items.some(x=>x.id===oldCredential))$("#tunnelCredential").value=oldCredential;
   updateTunnelZones();
   $("#tunnelCredential").onchange=()=>{updateTunnelZones();loadTunnelList()};
   $("#tunnelZone").onchange=loadTunnelList;
@@ -1189,12 +1226,16 @@ async function initTunnelPage(){
  }catch(e){msg($("#tunnelMsg"),e.message,true)}
 }
 $("#refreshTunnels").onclick=loadTunnelList;
+$("#openTunnelModal").onclick=openTunnelModal;
+$("#closeTunnelModal").onclick=closeTunnelModal;
+$("#cancelTunnelModal").onclick=closeTunnelModal;
+$("#tunnelModalBackdrop").onclick=closeTunnelModal;
+document.addEventListener("keydown",e=>{if(e.key==="Escape"&&$("#tunnelModal").classList.contains("show"))closeTunnelModal()});
 $("#tunnelForm").onsubmit=async e=>{
  e.preventDefault();const f=new FormData(e.target);const b=$("#createTunnelButton");b.disabled=true;b.textContent="正在创建...";
  try{
   const d=await api("/api/tunnels",{method:"POST",body:JSON.stringify({credentialId:$("#tunnelCredential").value,zoneId:$("#tunnelZone").value,name:f.get("name"),sub:f.get("sub"),path:f.get("path"),service:f.get("service")})});
-  msg($("#tunnelMsg"),"Tunnel 已创建："+d.item.hostname+"；请在 VPS 上启动 cloudflared 连接器");
-  e.target.reset();await loadTunnelList();
+  closeTunnelModal();e.target.reset();msg($("#tunnelMsg"),"Tunnel 已创建："+d.item.hostname+"；请在 VPS 上启动 cloudflared 连接器");await loadTunnelList();
  }catch(err){msg($("#tunnelMsg"),err.message,true)}
  finally{b.disabled=false;b.textContent="创建 Tunnel"}
 };
