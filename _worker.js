@@ -883,7 +883,9 @@ async function api(request, env, path) {
     const tunnel = await tunnelRequest(ctx.token,tunnelApiPath(ctx.accountId),"POST",{name,tunnel_secret:tunnelSecret,config_src:"cloudflare"});
     let dnsResult = {created:false,recordId:""};
     try {
-      await tunnelRequest(ctx.token,tunnelApiPath(ctx.accountId,tunnel.id)+"/configurations","PUT",{config:{ingress:[{hostname,service},{service:"http_status:404"}]}});
+      const initialPath=String(body.path||"").trim();
+      if(initialPath&&(!initialPath.startsWith("/")||initialPath.length>200))throw new Error("入口路径必须以 / 开头且不超过 200 个字符");
+      await tunnelRequest(ctx.token,tunnelApiPath(ctx.accountId,tunnel.id)+"/configurations","PUT",{config:{ingress:[{hostname,service,...(initialPath?{path:initialPath}:{})},{service:"http_status:404"}]}});
       dnsResult = await ensureTunnelCname(ctx.token,zoneId,hostname,tunnel.id);
     } catch(error) {
       await tunnelRequest(ctx.token,tunnelApiPath(ctx.accountId,tunnel.id),"DELETE").catch(()=>{});
@@ -923,6 +925,24 @@ async function api(request, env, path) {
         const dns=await ensureTunnelCname(ctx.token,zoneId,hostname,tunnelId);
         const next=ingress.filter(r=>r.hostname||r.path);next.push({hostname,service,...(rulePath?{path:rulePath}:{})});
         try{await putTunnelConfiguration(ctx.token,ctx.accountId,tunnelId,config,next)}catch(error){if(dns.created)await cleanupTunnelCnames(ctx.token,ctx.zones,tunnelId,[hostname]);throw error}
+      }else if(operation==="update"){
+        const service=normalizeTunnelService(body.service);
+        const zoneId=String(body.zoneId||"");
+        const zone=ctx.zones.find(z=>z.id===zoneId);
+        if(!zone)return json({error:"请选择属于当前 Cloudflare 账户的 Zone"},400);
+        const hostname=normalizeTunnelHostname(body.sub,zone.name);
+        const rulePath=String(body.path||"").trim();
+        const oldHostname=String(body.oldHostname||"").toLowerCase();
+        const oldPath=String(body.oldPath||"");
+        if(rulePath && (!rulePath.startsWith("/") || rulePath.length>200))return json({error:"路径必须以 / 开头且不超过 200 个字符"},400);
+        const index=ingress.findIndex(r=>String(r.hostname||"").toLowerCase()===oldHostname&&(r.path||"")===oldPath);
+        if(index<0)return json({error:"要编辑的入口规则不存在"},404);
+        if(ingress.some((r,i)=>i!==index&&r.hostname===hostname&&(r.path||"")===rulePath))return json({error:"目标域名和路径规则已存在"},409);
+        const dns=await ensureTunnelCname(ctx.token,zoneId,hostname,tunnelId);
+        const next=ingress.slice();
+        next[index]={hostname,service,...(rulePath?{path:rulePath}:{})};
+        try{await putTunnelConfiguration(ctx.token,ctx.accountId,tunnelId,config,next)}catch(error){if(dns.created)await cleanupTunnelCnames(ctx.token,ctx.zones,tunnelId,[hostname]);throw error}
+        if(oldHostname!==hostname&&!next.some(r=>r.hostname===oldHostname))await cleanupTunnelCnames(ctx.token,ctx.zones,tunnelId,[oldHostname]);
       }else if(operation==="delete"){
         const hostname=String(body.hostname||"");const rulePath=String(body.path||"");
         const index=ingress.findIndex(r=>r.hostname===hostname&&(r.path||"")===rulePath);
