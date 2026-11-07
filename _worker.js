@@ -267,7 +267,13 @@ export default {
       if (!env.DOMAIN_DB) return json({ error: "Missing D1 binding DOMAIN_DB" }, 500);
       if (!env.PASSWORD || !env.SESSION_SECRET || !env.ENCRYPTION_KEY) return json({ error: "请配置 PASSWORD、SESSION_SECRET、ENCRYPTION_KEY 三个 Worker Secrets" }, 500);
       const url = new URL(request.url);
-      if (url.pathname.startsWith("/api/")) return await api(request, env, url.pathname);
+      if (url.pathname.startsWith("/api/")) {
+        if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method)) {
+          const origin = request.headers.get("Origin");
+          if (!origin || new URL(origin).origin !== url.origin) return json({ error: "Cross-origin request rejected" }, 403);
+        }
+        return await api(request, env, url.pathname);
+      }
       if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) return html(PAGE);
       return json({ error: "Not found" }, 404);
     } catch (error) {
