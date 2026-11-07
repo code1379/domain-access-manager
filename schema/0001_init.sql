@@ -56,3 +56,10 @@ CREATE TABLE IF NOT EXISTS operation_logs (
 CREATE INDEX IF NOT EXISTS idx_operation_logs_created_at ON operation_logs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_managed_sites_node ON managed_sites(panel_node_id);
 CREATE INDEX IF NOT EXISTS idx_managed_sites_cf ON managed_sites(cloudflare_credential_id);
+
+CREATE TABLE IF NOT EXISTS login_attempts (
+  ip_hash TEXT PRIMARY KEY,
+  failures INTEGER NOT NULL DEFAULT 0,
+  locked_until INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL
+);
