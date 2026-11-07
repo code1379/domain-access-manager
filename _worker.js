@@ -423,16 +423,46 @@ async function api(request, env, path) {
     if(!site) return json({error:"域名任务不存在"},404);
     const meta=JSON.parse(site.metadata_json||"{}");
     if(site.status==="ready") return json({ok:true,item:{id,hostname:site.hostname,status:site.status,websiteId:meta.websiteId,sslId:site.ssl_id}});
-    if(site.status==="failed" && !meta.sslId) return json({ok:false,item:{id,hostname:site.hostname,status:site.status,error:site.last_error}});
-    if(site.status==="failed" && meta.sslId) {
-      meta.stage="certificate_pending";
-      delete meta.error;
-      await env.DOMAIN_DB.prepare("UPDATE managed_sites SET status='certificate_pending',last_error=NULL,metadata_json=?,updated_at=? WHERE id=?")
-        .bind(JSON.stringify(meta),new Date().toISOString(),id).run();
-    }
     const {node,apiKey}=await getPanelNode(env,site.panel_node_id);
     try {
-      if(!meta.sslId) throw new Error("证书任务缺少 1Panel SSL ID");
+      if(!meta.sslId) {
+        const cfRow=await env.DOMAIN_DB.prepare("SELECT name,token_ciphertext FROM cloudflare_credentials WHERE id=?").bind(site.cloudflare_credential_id).first();
+        if(!cfRow) throw new Error("Cloudflare 凭据不存在，无法恢复证书申请");
+        const cloudflareToken=await decryptSecret(env,cfRow.token_ciphertext);
+        const accounts=await ensurePanelAccounts(env,node,apiKey,site.cloudflare_credential_id,cfRow.name,cloudflareToken,meta.email);
+        const sslMatches=await panelPageItems(node.base_url,apiKey,"/websites/ssl/search",{
+          page:1,pageSize:100,domain:site.hostname,orderBy:"created_at",order:"descending"
+        });
+        const sameDomain=sslMatches.filter(x=>String(x.primaryDomain||"").toLowerCase()===site.hostname.toLowerCase());
+        const reusable=sameDomain.find(x=>Number(x.acmeAccountId)===accounts.acmeAccountId&&Number(x.dnsAccountId)===accounts.dnsAccountId);
+        if(reusable?.id) {
+          meta.sslId=Number(reusable.id);
+        } else if(sameDomain.length) {
+          throw new Error("1Panel 已存在该域名的 SSL 记录，但使用了其他 ACME 或 DNS 账户。为避免重复申请，请先在 1Panel 检查该域名证书");
+        } else {
+          const createdSSL=await panelRequest(node.base_url,apiKey,"POST","/websites/ssl",{
+            primaryDomain:site.hostname,otherDomains:"",provider:"dnsAccount",acmeAccountId:accounts.acmeAccountId,dnsAccountId:accounts.dnsAccountId,autoRenew:true,keyType:"EC256",disableCNAME:false,skipDNS:false,apply:true,description:"Domain Access Manager"
+          });
+          meta.sslId=Number(createdSSL.id||createdSSL.ID||createdSSL.data?.id||0);
+          if(!meta.sslId) {
+            const refreshed=await panelPageItems(node.base_url,apiKey,"/websites/ssl/search",{
+              page:1,pageSize:100,domain:site.hostname,orderBy:"created_at",order:"descending"
+            });
+            const found=refreshed.find(x=>String(x.primaryDomain||"").toLowerCase()===site.hostname.toLowerCase()&&Number(x.acmeAccountId)===accounts.acmeAccountId&&Number(x.dnsAccountId)===accounts.dnsAccountId);
+            meta.sslId=Number(found?.id||0);
+          }
+          if(!meta.sslId) throw new Error("1Panel 未返回 SSL ID，且无法通过域名查询到新建的证书记录");
+        }
+        meta.stage="certificate_pending";
+        delete meta.error;
+        await env.DOMAIN_DB.prepare("UPDATE managed_sites SET ssl_id=?,status='certificate_pending',last_error=NULL,metadata_json=?,updated_at=? WHERE id=?")
+          .bind(String(meta.sslId),JSON.stringify(meta),new Date().toISOString(),id).run();
+      } else if(site.status==="failed") {
+        meta.stage="certificate_pending";
+        delete meta.error;
+        await env.DOMAIN_DB.prepare("UPDATE managed_sites SET status='certificate_pending',last_error=NULL,metadata_json=?,updated_at=? WHERE id=?")
+          .bind(JSON.stringify(meta),new Date().toISOString(),id).run();
+      }
       const ssl=await panelRequest(node.base_url,apiKey,"GET","/websites/ssl/"+encodeURIComponent(meta.sslId));
       const sslData=ssl.websiteSSL||ssl;
       const status=String(sslData.status||"").toLowerCase();
@@ -667,7 +697,7 @@ function updatePublishZones(){
  $("#publishZone").innerHTML=(item?.zones||[]).map(z=>'<option value="'+esc(z.id)+'">'+esc(z.name)+'</option>').join("");
 }
 async function loadPublishList(){
- try{const d=await api("/api/publish");$("#publishList").innerHTML=d.items.length?d.items.map(x=>'<div class="item"><div class="row"><b>'+esc(x.hostname)+'</b><span class="pill '+(x.status==="ready"?"":x.status==="failed"?"bad":"")+'">'+esc(x.status)+'</span></div><small>'+esc(x.lastError||x.metadata?.stage||"")+' · '+esc(x.updatedAt)+'</small><div class="actions" style="margin-top:8px">'+(x.status==="certificate_pending"||x.status==="provisioning"?'<button data-progress="'+esc(x.id)+'">检查进度</button>':x.status==="failed"&&x.metadata?.sslId?'<button data-progress="'+esc(x.id)+'">重试后续步骤</button>':'')+'</div></div>').join(""):'<div class="empty">尚未接入域名</div>';document.querySelectorAll("[data-progress]").forEach(b=>b.onclick=()=>checkPublishProgress(b.dataset.progress,true))}catch(e){$("#publishList").textContent=e.message}
+ try{const d=await api("/api/publish");$("#publishList").innerHTML=d.items.length?d.items.map(x=>'<div class="item"><div class="row"><b>'+esc(x.hostname)+'</b><span class="pill '+(x.status==="ready"?"":x.status==="failed"?"bad":"")+'">'+esc(x.status)+'</span></div><small>'+esc(x.lastError||x.metadata?.stage||"")+' · '+esc(x.updatedAt)+'</small><div class="actions" style="margin-top:8px">'+(x.status==="certificate_pending"||x.status==="provisioning"?'<button data-progress="'+esc(x.id)+'">检查进度</button>':x.status==="failed"?'<button data-progress="'+esc(x.id)+'">重试接入</button>':'')+'</div></div>').join(""):'<div class="empty">尚未接入域名</div>';document.querySelectorAll("[data-progress]").forEach(b=>b.onclick=()=>checkPublishProgress(b.dataset.progress,true))}catch(e){$("#publishList").textContent=e.message}
 }
 async function checkPublishProgress(id,showMessage){
  try{const d=await api("/api/publish/"+id+"/progress",{method:"POST",body:"{}"});const item=d.item||{};if(showMessage)msg($("#publishMsg"),item.status==="ready"?"域名接入完成："+item.hostname:(item.message||"当前状态："+item.status));await loadPublishList();return item}catch(e){if(showMessage)msg($("#publishMsg"),e.message,true);await loadPublishList();return {status:"failed",error:e.message}}
