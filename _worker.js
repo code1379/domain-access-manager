@@ -106,17 +106,19 @@ async function discoverZones(token) {
   const zones = [];
   for (let page = 1; page <= 20; page++) {
     const part = await cfRequest(token, "/zones?per_page=50&page=" + page);
-    zones.push(...part.map(z => ({ id: z.id, name: z.name, status: z.status, accountName: z.account?.name || "" })));
+    zones.push(...part.map(z => ({ id: z.id, name: z.name, status: z.status, accountId: z.account?.id || "", accountName: z.account?.name || "" })));
     if (part.length < 50) break;
   }
   return zones;
 }
 async function getTunnelContext(env, credentialId, zoneId) {
-  const row = await env.DOMAIN_DB.prepare("SELECT id,name,token_ciphertext,zones_json FROM cloudflare_credentials WHERE id=?").bind(credentialId).first();
+  const row = await env.DOMAIN_DB.prepare("SELECT id,name,account_id,token_ciphertext,zones_json FROM cloudflare_credentials WHERE id=?").bind(credentialId).first();
   if (!row) throw new Error("Cloudflare 凭据不存在");
+  const accountId = String(row.account_id || "").trim().toLowerCase();
+  if (!/^[0-9a-f]{32}$/.test(accountId)) throw new Error("该凭据尚未配置有效的 Account ID，请在 Cloudflare 凭据页面更新为账户 API Token");
   const zones = JSON.parse(row.zones_json || "[]");
   const zone = zones.find(x => x.id === zoneId);
-  if (!zone) throw new Error("所选 Zone 不属于此 Cloudflare 凭据");
+  if (!zone) throw new Error("所选 Zone 不属于此 Cloudflare 账户凭据");
   const token = await decryptSecret(env, row.token_ciphertext);
   let zoneInfo;
   try {
@@ -124,8 +126,8 @@ async function getTunnelContext(env, credentialId, zoneId) {
   } catch (error) {
     throw new Error("读取 Cloudflare Zone 账户信息失败，请确认 Token 有 Zone Read 权限：" + (error?.message || String(error)));
   }
-  const accountId = String(zoneInfo?.account?.id || "");
-  if (!accountId) throw new Error("无法从 Cloudflare Zone 获取 Account ID");
+  const liveAccountId = String(zoneInfo?.account?.id || "").toLowerCase();
+  if (liveAccountId !== accountId) throw new Error("所选 Zone 实际所属 Account ID 与凭据保存的 Account ID 不一致，请检查账号和 Zone");
   return { row, zones, zone, token, accountId };
 }
 function tunnelApiPath(accountId, tunnelId = "") {
@@ -337,6 +339,14 @@ async function ensurePanelAccounts(env, node, apiKey, credentialId, credentialNa
   }
   if (!dnsAccount?.id) throw new Error("1Panel Cloudflare DNS 账户不存在或创建后无法读取，请检查网站设置中的 DNS 账户列表");
   const dnsAccountId = Number(dnsAccount.id);
+  // Refresh the 1Panel DNS account authorization so rotating from a deleted
+  // User API Token to an Account API Token does not leave a stale credential.
+  await panelRequest(node.base_url, apiKey, "POST", "/websites/dns/update", {
+    id: dnsAccountId,
+    name: dnsName,
+    type: "CloudFlare",
+    authorization: { email: "", apiKey: cloudflareToken }
+  });
 
   const acmeAccounts = await panelPageItems(node.base_url, apiKey, "/websites/acme/search", { page: 1, pageSize: 100 });
   let acmeAccount = acmeAccounts.find(x => Number(x.id) === Number(existing?.acme_account_id) && String(x.email || "").toLowerCase() === email.toLowerCase() && x.type === "letsencrypt");
@@ -393,27 +403,42 @@ async function api(request, env, path) {
   if (path === "/api/me") return json({ ok: true, app: env.APP_NAME || "Domain Access Manager" });
 
   if (path === "/api/cloudflare" && request.method === "GET") {
-    const { results } = await env.DOMAIN_DB.prepare("SELECT id,name,zones_json,zone_count,token_status,created_at,updated_at,last_verified_at FROM cloudflare_credentials ORDER BY created_at DESC").all();
+    const { results } = await env.DOMAIN_DB.prepare("SELECT id,name,account_id,zones_json,zone_count,token_status,created_at,updated_at,last_verified_at FROM cloudflare_credentials ORDER BY created_at DESC").all();
     return json({ items: results.map(x => ({ ...x, zones: JSON.parse(x.zones_json || "[]") })) });
   }
   if (path === "/api/cloudflare/verify" && request.method === "POST") {
     const name = safeName(body.name);
+    const accountId = String(body.accountId || "").trim().toLowerCase();
+    const credentialId = String(body.credentialId || "").trim();
     const token = String(body.token || "").trim();
-    if (!token || token.length > 4096) return json({ error: "请填写有效的 API Token" }, 400);
+    if (!/^[0-9a-f]{32}$/.test(accountId)) return json({ error: "Account ID 必须是 32 位十六进制字符串" }, 400);
+    if (!token || token.length > 4096) return json({ error: "请填写账户 API Token" }, 400);
     try {
-      const verify = await cfRequest(token, "/user/tokens/verify");
-      if (verify.status !== "active") throw new Error("Cloudflare Token 状态不是 active");
-      const zones = await discoverZones(token);
-      if (!zones.length) throw new Error("Token 有效，但没有发现可访问的 Zone。请检查 Zone Read 权限。");
-      const id = randomId();
+      const verify = await cfRequest(token, "/accounts/" + encodeURIComponent(accountId) + "/tokens/verify");
+      if (verify.status !== "active") throw new Error("Cloudflare 账户 API Token 状态不是 active");
+      const discoveredZones = await discoverZones(token);
+      const zones = discoveredZones.filter(z => String(z.accountId || "").toLowerCase() === accountId);
+      if (!zones.length) throw new Error("账户 API Token 有效，但没有发现该 Account 下可访问的 Zone。请检查 Account ID，以及 Zone → Read 权限。");
       const encrypted = await encryptSecret(env, token);
       const now = new Date().toISOString();
-      await env.DOMAIN_DB.prepare("INSERT INTO cloudflare_credentials(id,name,token_ciphertext,zones_json,zone_count,token_status,created_at,updated_at,last_verified_at) VALUES(?,?,?,?,?,?,?,?,?)")
-        .bind(id, name, encrypted, JSON.stringify(zones), zones.length, "active", now, now, now).run();
-      await log(env, "credential.add", "cloudflare", id, "success", "Cloudflare Token 验证成功并发现 " + zones.length + " 个 Zone");
-      return json({ ok: true, item: { id, name, zones, zoneCount: zones.length, tokenStatus: "active" } });
+      let id = credentialId;
+      if (credentialId) {
+        const existing = await env.DOMAIN_DB.prepare("SELECT id FROM cloudflare_credentials WHERE id=?").bind(credentialId).first();
+        if (!existing) return json({ error: "要更新的 Cloudflare 凭据不存在，请刷新页面后重试" }, 404);
+        const linked = await env.DOMAIN_DB.prepare("SELECT hostname,zone_id FROM managed_sites WHERE cloudflare_credential_id=?").bind(credentialId).all();
+        const missingZones = (linked.results || []).filter(site => !zones.some(z => z.id === site.zone_id));
+        if (missingZones.length) throw new Error("新 Token 无法访问这些已接入域名所属的 Zone：" + missingZones.map(x => x.hostname).join(", ") + "。为保护现有域名，请使用包含这些 Zone 的 Account API Token。");
+        await env.DOMAIN_DB.prepare("UPDATE cloudflare_credentials SET name=?,account_id=?,token_ciphertext=?,zones_json=?,zone_count=?,token_status='active',updated_at=?,last_verified_at=? WHERE id=?")
+          .bind(name, accountId, encrypted, JSON.stringify(zones), zones.length, now, now, credentialId).run();
+      } else {
+        id = randomId();
+        await env.DOMAIN_DB.prepare("INSERT INTO cloudflare_credentials(id,name,account_id,token_ciphertext,zones_json,zone_count,token_status,created_at,updated_at,last_verified_at) VALUES(?,?,?,?,?,?,?,?,?,?)")
+          .bind(id, name, accountId, encrypted, JSON.stringify(zones), zones.length, "active", now, now, now).run();
+      }
+      await log(env, credentialId ? "credential.update" : "credential.add", "cloudflare", id, "success", "Cloudflare 账户 API Token 验证成功并发现 " + zones.length + " 个 Zone", { accountId });
+      return json({ ok: true, item: { id, name, accountId, zones, zoneCount: zones.length, tokenStatus: "active" } });
     } catch (error) {
-      await log(env, "credential.verify", "cloudflare", null, "failed", error.message);
+      await log(env, credentialId ? "credential.update" : "credential.verify", "cloudflare", credentialId || null, "failed", error.message, { accountId });
       return json({ error: error.message }, 400);
     }
   }
@@ -919,7 +944,7 @@ const PAGE = `<!doctype html>
 <div id="app" class="wrap hidden"><header class="top"><div><div class="brand">Domain Access Manager</div><small>Cloudflare DNS & 1Panel 管理</small></div><button id="logout">退出登录</button></header>
 <nav class="tabs"><button data-tab="overview" class="active">概览</button><button data-tab="cloudflare">Cloudflare</button><button data-tab="nodes">VPS / 1Panel</button><button data-tab="dns">DNS 记录</button><button data-tab="publish">域名接入</button><button data-tab="domains">域名管理</button><button data-tab="tunnels">Tunnel 管理</button><button data-tab="logs">操作记录</button></nav>
 <section id="overview" class="tab grid"><div class="card"><h3>Cloudflare 凭据</h3><div id="countCf">-</div><small>多个 Token，自动发现 Zone</small></div><div class="card"><h3>1Panel 节点</h3><div id="countNodes">-</div><small>多个 VPS，独立 API 凭据</small></div><div class="card"><h3>下一步</h3><p class="muted">先添加 Cloudflare Token 和 1Panel 节点，随后即可建设 DNS → SSL → 反向代理的一键发布流程。</p></div></section>
-<section id="cloudflare" class="tab hidden grid"><div class="card"><h3>添加 Cloudflare 凭据</h3><form id="cfForm"><div class="field"><label>配置名称</label><input name="name" placeholder="例如：个人域名" required></div><div class="field"><label>API Token</label><input name="token" type="password" autocomplete="off" required></div><button class="primary">验证 Token 并自动获取域名</button></form><div id="cfMsg"></div></div><div class="card"><h3>已保存的 Cloudflare 账号</h3><div id="cfList" class="muted">加载中...</div></div></section>
+<section id="cloudflare" class="tab hidden grid"><div class="card"><h3>添加 Cloudflare 账户 API Token</h3><p class="muted">仅支持 Account API Token。请填写 Cloudflare 账户 ID（32 位），Token 将加密保存在 D1，不会返回到页面。</p><form id="cfForm"><input id="cfCredentialId" name="credentialId" type="hidden"><div class="field"><label>配置名称</label><input name="name" placeholder="例如：主账号" required></div><div class="field"><label>Cloudflare Account ID（32 位）</label><input name="accountId" placeholder="从 dash.cloudflare.com/ 后的 32 位账户 ID 获取" minlength="32" maxlength="32" pattern="[a-fA-F0-9]{32}" required></div><div class="field"><label>账户 API Token</label><input name="token" type="password" autocomplete="off" placeholder="粘贴账户 API Token" required></div><button class="primary" id="cfSubmitButton">验证并添加账户 API Token</button><button type="button" id="cfCancelEdit" class="hidden">取消更新</button></form><div class="notice">权限至少需要 Account → Cloudflare Tunnel → Edit，以及 Zone → DNS → Edit、Zone → Read。更新已有凭据会保留关联的域名任务和 1Panel 账户映射。</div><div id="cfMsg"></div></div><div class="card"><h3>已保存的 Cloudflare 账号</h3><div id="cfList" class="muted">加载中...</div></div></section>
 <section id="nodes" class="tab hidden grid"><div class="card"><h3>添加 1Panel 节点</h3><form id="nodeForm"><div class="field"><label>节点名称</label><input name="name" placeholder="例如：日本 VPS" required></div><div class="field"><label>1Panel 地址（HTTP / HTTPS）</label><input id="nodeBaseUrl" name="baseUrl" placeholder="http://104.233.209.110:32666 或 https://panel.example.com" required></div><div class="field"><label>1Panel API Key</label><input name="apiKey" type="password" autocomplete="off" required></div><button type="submit" class="primary">测试连接并保存</button></form><div id="nodeMsg"></div><div class="notice">支持 HTTP 和 HTTPS，也支持 IP 地址。若 Worker 无法直连 IP，会引导你到 DNS 记录页面创建 DNS-only A 记录，再返回此处使用域名连接。HTTP 不加密 API Key 和请求内容，建议仅临时使用并尽快配置 HTTPS。</div></div><div class="card"><h3>已保存的 VPS 节点</h3><div id="nodeList" class="muted">加载中...</div></div></section>
 <section id="dns" class="tab hidden grid">
 <div id="panelDnsAssist" class="card hidden"><h3>为 1Panel 创建管理地址 DNS</h3><div id="panelDnsAssistText" class="notice"></div><div class="muted" style="margin:8px 0">已自动带入 VPS 公网 IP。选择 Cloudflare 凭据和 Zone，填写记录前缀后创建 A 记录；请保持 DNS Only（灰色云）。</div></div>
@@ -982,7 +1007,10 @@ async function refresh(){await Promise.all([loadCf(),loadNodes(),loadLogs()]);tr
 document.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{document.querySelectorAll("[data-tab]").forEach(x=>x.classList.toggle("active",x===b));document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("hidden",x.id!==b.dataset.tab));if(b.dataset.tab==="tunnels")initTunnelPage()});
 $("#loginForm").onsubmit=async e=>{e.preventDefault();const p=new FormData(e.target).get("password");try{await api("/api/login",{method:"POST",body:JSON.stringify({password:p})});e.target.reset();$("#loginMsg").innerHTML="";showApp()}catch(err){msg($("#loginMsg"),err.message,true)}};
 $("#logout").onclick=async()=>{await api("/api/logout",{method:"POST",body:"{}"});showLogin()};
-$("#cfForm").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);const b=e.target.querySelector("button");b.disabled=true;b.textContent="验证中...";try{const d=await api("/api/cloudflare/verify",{method:"POST",body:JSON.stringify({name:f.get("name"),token:f.get("token")})});e.target.reset();msg($("#cfMsg"),"验证成功，发现 "+d.item.zoneCount+" 个域名");await loadCf();await loadPublishOptions()}catch(err){msg($("#cfMsg"),err.message,true)}finally{b.disabled=false;b.textContent="验证 Token 并自动获取域名"}};
+function resetCfCredentialForm(){const form=$("#cfForm");form.reset();$("#cfCredentialId").value="";$("#cfSubmitButton").textContent="验证并添加账户 API Token";$("#cfCancelEdit").classList.add("hidden")}
+$("#cfCancelEdit").onclick=resetCfCredentialForm;
+$("#cfForm").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);const b=$("#cfSubmitButton");b.disabled=true;b.textContent="验证账户 Token...";try{const d=await api("/api/cloudflare/verify",{method:"POST",body:JSON.stringify({credentialId:f.get("credentialId"),name:f.get("name"),accountId:f.get("accountId"),token:f.get("token")})});resetCfCredentialForm();msg($("#cfMsg"),(f.get("credentialId")?"账户凭据已更新":"账户 API Token 验证成功并添加")+"，发现 "+d.item.zoneCount+" 个 Zone");await loadCf();await loadDnsCredentials();await loadPublishOptions()}catch(err){msg($("#cfMsg"),err.message,true)}finally{b.disabled=false;if(!$("#cfCredentialId").value)b.textContent="验证并添加账户 API Token";else b.textContent="验证并更新账户 API Token"}};
+function editCfCredential(id){const item=(window.__allCfItems||[]).find(x=>x.id===id);if(!item)return;$("#cfCredentialId").value=item.id;$("#cfForm").elements.namedItem("name").value=item.name;$("#cfForm").elements.namedItem("accountId").value=item.account_id||"";$("#cfForm").elements.namedItem("token").value="";$("#cfSubmitButton").textContent="验证并更新账户 API Token";$("#cfCancelEdit").classList.remove("hidden");$("#cfMsg").textContent="正在更新 "+item.name+"。输入新的账户 API Token；现有域名关联将保留。";$("#cfForm").scrollIntoView({behavior:"smooth",block:"start"})}
 function activateTab(tab){document.querySelectorAll("[data-tab]").forEach(x=>x.classList.toggle("active",x.dataset.tab===tab));document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("hidden",x.id!==tab));}
 function isIPv4Address(value){return /^(?:\\d{1,3}\\.){3}\\d{1,3}$/.test(value||"")&&value.split(".").every(x=>Number(x)>=0&&Number(x)<=255);}
 function showPanelDnsRedirect(baseUrl,errorText){
@@ -996,9 +1024,9 @@ function showPanelDnsRedirect(baseUrl,errorText){
   return true;
 }
 $("#nodeForm").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);const b=e.submitter||e.target.querySelector('button[type="submit"]')||e.target.querySelector("button");if(b){b.disabled=true;b.textContent="连接测试中...";}try{const d=await api("/api/nodes/test",{method:"POST",body:JSON.stringify({name:f.get("name"),baseUrl:f.get("baseUrl"),apiKey:f.get("apiKey")})});e.target.reset();msg($("#nodeMsg"),"连接成功"+(d.item.panelVersion?" · 版本 "+d.item.panelVersion:""));await loadNodes();await loadPublishOptions()}catch(err){const redirected=showPanelDnsRedirect(f.get("baseUrl"),err.message);if(!redirected)msg($("#nodeMsg"),err.message,true)}finally{if(b){b.disabled=false;b.textContent="测试连接并保存";}}};
-async function loadCf(){try{const d=await api("/api/cloudflare");window.__cfItems=d.items;$("#countCf").textContent=d.items.length+" 个凭据";$("#cfList").innerHTML=d.items.length?d.items.map(x=>'<div class="item"><div class="row"><b>'+esc(x.name)+'</b><button class="danger" data-del-cf="'+esc(x.id)+'">删除</button></div><small>'+x.zone_count+' 个 Zone · Token '+esc(x.token_status)+'</small><div>'+x.zones.map(z=>'<span class="zone">'+esc(z.name)+'</span>').join("")+'</div></div>').join(""):'<div class="empty">尚未添加 Cloudflare 凭据</div>';document.querySelectorAll("[data-del-cf]").forEach(b=>b.onclick=async()=>{if(confirm("确定删除该凭据？")){try{await api("/api/cloudflare/"+b.dataset.delCf,{method:"DELETE"});loadCf()}catch(e){alert(e.message)}}})}catch(e){$("#cfList").textContent=e.message}}
+async function loadCf(){try{const d=await api("/api/cloudflare");window.__allCfItems=d.items;const active=d.items.filter(x=>x.account_id);window.__cfItems=active;$("#countCf").textContent=active.length+" 个账户 API 凭据";$("#cfList").innerHTML=d.items.length?d.items.map(x=>'<div class="item"><div class="row"><b>'+esc(x.name)+'</b><div class="actions"><button data-edit-cf="'+esc(x.id)+'">更新</button><button class="danger" data-del-cf="'+esc(x.id)+'">删除</button></div></div><small>'+(x.account_id?'Account ID · '+esc(x.account_id):'旧版用户 Token · 请更新为账户 API Token')+' · '+esc(x.token_status)+'</small><div>'+x.zones.map(z=>'<span class="zone">'+esc(z.name)+'</span>').join("")+'</div></div>').join(""):'<div class="empty">尚未添加 Cloudflare 账户 API Token</div>';document.querySelectorAll("[data-edit-cf]").forEach(b=>b.onclick=()=>editCfCredential(b.dataset.editCf));document.querySelectorAll("[data-del-cf]").forEach(b=>b.onclick=async()=>{if(confirm("确定删除该凭据？如果仍被域名接入任务使用，需要先更新或清理关联域名。")){try{await api("/api/cloudflare/"+b.dataset.delCf,{method:"DELETE"});await loadCf()}catch(e){alert(e.message)}}})}catch(e){$("#cfList").textContent=e.message}}
 async function loadNodes(){try{const d=await api("/api/nodes");$("#countNodes").textContent=d.items.length+" 台 VPS";$("#nodeList").innerHTML=d.items.length?d.items.map(x=>'<div class="item"><div class="row"><b>'+esc(x.name)+'</b><span class="pill">'+esc(x.connection_status)+'</span></div><small>'+esc(x.base_url)+(x.panel_version?' · '+esc(x.panel_version):'')+'</small><div class="actions" style="margin-top:8px"><button class="danger" data-del-node="'+esc(x.id)+'">删除</button></div></div>').join(""):'<div class="empty">尚未添加 1Panel 节点</div>';document.querySelectorAll("[data-del-node]").forEach(b=>b.onclick=async()=>{if(confirm("确定删除该节点？")){try{await api("/api/nodes/"+b.dataset.delNode,{method:"DELETE"});loadNodes()}catch(e){alert(e.message)}}})}catch(e){$("#nodeList").textContent=e.message}}
-async function loadDnsCredentials(){const d=await api("/api/cloudflare");window.__cfItems=d.items;const sel=$("#dnsCredential");sel.innerHTML=d.items.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.name)+'</option>').join("");updateDnsZones();sel.onchange=updateDnsZones}
+async function loadDnsCredentials(){const d=await api("/api/cloudflare");const items=d.items.filter(x=>x.account_id);window.__cfItems=items;const sel=$("#dnsCredential");sel.innerHTML=items.length?items.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.name)+'</option>').join(""):'<option value="">请先添加账户 API Token</option>';updateDnsZones();sel.onchange=updateDnsZones}
 function updateDnsZones(){const d=$("#dnsCredential").selectedOptions[0];const cfListCache=window.__cfItems||[];const item=cfListCache.find(x=>x.id===d?.value);$("#dnsZone").innerHTML=(item?.zones||[]).map(z=>'<option value="'+esc(z.id)+'">'+esc(z.name)+'</option>').join("")}
 async function loadDns(){
  try{
@@ -1035,8 +1063,9 @@ $("#loadDns").onclick=loadDns;
 $("#dnsForm").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{const zoneName=$("#dnsZone").selectedOptions[0]?.textContent||"";const recordName=String(f.get("name")||"").trim().toLowerCase();const type=String(f.get("type")||"").toUpperCase();const content=String(f.get("content")||"").trim();const d=await api("/api/dns/records",{method:"POST",body:JSON.stringify({credentialId:$("#dnsCredential").value,zoneId:$("#dnsZone").value,type,name:recordName,content,ttl:Number(f.get("ttl")||1),proxied:window.__pendingPanelDns?false:f.get("proxied")==="on"})});msg($("#dnsCreateMsg"),"DNS 记录已创建："+d.item.name);if(window.__pendingPanelDns&&type==="A"&&content===window.__pendingPanelDns.ip){const pending=window.__pendingPanelDns;const hostname=recordName==="@"?zoneName:(recordName===zoneName||recordName.endsWith("."+zoneName)?recordName:recordName+"."+zoneName);const address=pending.protocol+"//"+hostname+(pending.port?":"+pending.port:"")+pending.pathname;const done=document.createElement("div");done.className="notice";done.style.marginTop="10px";done.textContent="管理地址已生成："+address+"。DNS 不包含端口，端口已保留在管理地址中。";const back=document.createElement("button");back.type="button";back.className="primary";back.style.marginTop="10px";back.textContent="返回 VPS / 1Panel";back.onclick=()=>{activateTab("nodes");$("#nodeBaseUrl").value=address;$("#panelDnsAssist").classList.add("hidden");window.__pendingPanelDns=null;};done.appendChild(document.createElement("br"));done.appendChild(back);$("#dnsCreateMsg").appendChild(done);}e.target.reset();await loadDns()}catch(err){msg($("#dnsCreateMsg"),err.message,true)}};
 async function loadPublishOptions(){
  const [cf,nodes]=await Promise.all([api("/api/cloudflare"),api("/api/nodes")]);
- window.__publishCf=cf.items;window.__publishNodes=nodes.items;
- $("#publishCredential").innerHTML=cf.items.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.name)+'</option>').join("");
+ const accountCredentials=cf.items.filter(x=>x.account_id);
+ window.__publishCf=accountCredentials;window.__publishNodes=nodes.items;
+ $("#publishCredential").innerHTML=accountCredentials.length?accountCredentials.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.name)+'</option>').join(""):'<option value="">请先添加账户 API Token</option>';
  updatePublishZones();
  $("#publishCredential").onchange=updatePublishZones;
  $("#publishNode").innerHTML=nodes.items.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.name)+' · '+esc(x.connection_status)+'</option>').join("");
@@ -1151,8 +1180,8 @@ async function deleteTunnel(id){
 }
 async function initTunnelPage(){
  try{
-  const d=await api("/api/cloudflare");window.__cfItems=d.items;
-  $("#tunnelCredential").innerHTML=d.items.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.name)+'</option>').join("");
+  const d=await api("/api/cloudflare");const items=d.items.filter(x=>x.account_id);window.__cfItems=items;
+  $("#tunnelCredential").innerHTML=items.length?items.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.name)+'</option>').join(""):'<option value="">请先添加账户 API Token</option>';
   updateTunnelZones();
   $("#tunnelCredential").onchange=()=>{updateTunnelZones();loadTunnelList()};
   $("#tunnelZone").onchange=loadTunnelList;
