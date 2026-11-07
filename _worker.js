@@ -805,7 +805,7 @@ async function loadDomains(){
   document.querySelectorAll("[data-domain-delete]").forEach(b=>b.onclick=async()=>{
    const item=d.items.find(x=>x.id===b.dataset.domainDelete);
    if(!item)return;
-   const ok=confirm("确定删除 "+item.hostname+" 的接入配置？\n\n将清理本工具创建的 1Panel 反向代理网站、SSL 证书和 Cloudflare A 记录。\n共享 DNS/ACME 账户及接入前已存在的 DNS 记录会保留。");
+   const ok=confirm("确定删除 "+item.hostname+" 的接入配置？\\n\\n将清理本工具创建的 1Panel 反向代理网站、SSL 证书和 Cloudflare A 记录。\\n共享 DNS/ACME 账户及接入前已存在的 DNS 记录会保留。");
    if(!ok)return;
    b.disabled=true;b.textContent="删除中...";
    try{
