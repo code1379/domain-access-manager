@@ -101,7 +101,7 @@ Create narrowly scoped API tokens. The initial discovery flow needs:
 
 The application verifies the token and displays the zones it can access. It does not ask users to type Zone names or IDs manually.
 
-## Security notes
+## One-click publishing workflow\n\nThe publish form asks for the Cloudflare credential, Zone, hostname, 1Panel node, upstream URL, and Let's Encrypt contact email. The server IPv4 is taken from the node's 1Panel dashboard metadata when available; otherwise it must be entered manually.\n\nThe workflow deliberately refuses to overwrite an existing A record with a different IP and refuses to take over an existing 1Panel website. The DNS-01 certificate request is asynchronous; the UI polls the saved task and creates the website only after the certificate status is `ready`. A failed or interrupted job may need manual inspection in 1Panel before retry support is used.\n\n1Panel DNS credential mapping is stored by (node, Cloudflare credential). The 1Panel DNS provider uses the Cloudflare Token as its `authorization.apiKey` under provider type `CloudFlare`; the provider implementation accepts API Token authentication without a legacy Global API Key.\n\n## Security notes
 
 - Use HTTPS for every 1Panel endpoint.
 - D1 stores encrypted credentials; the encryption key stays in Worker Secrets.
