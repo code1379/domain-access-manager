@@ -2,6 +2,11 @@
 
 Cloudflare Worker-based control panel for managing Cloudflare DNS credentials and 1Panel VPS nodes, with a one-click reverse-proxy publishing workflow planned.
 
+## Reference project
+
+- [eooce/Cloudflare-Tunnel-Panel](https://github.com/eooce/Cloudflare-Tunnel-Panel) — UI and interaction reference for Cloudflare Tunnel management, including tunnel lists, tunnel editing, token display/copy actions, and ingress route management.
+- Domain Access Manager is an independent implementation built around Cloudflare Workers and D1. The reference repository is credited for product/UI inspiration; it is not a runtime dependency.
+
 ## Product scope
 
 - Single administrator login (password configured as a Worker Secret).
