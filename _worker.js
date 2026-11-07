@@ -111,6 +111,135 @@ async function discoverZones(token) {
   }
   return zones;
 }
+async function getTunnelContext(env, credentialId, zoneId) {
+  const row = await env.DOMAIN_DB.prepare("SELECT id,name,token_ciphertext,zones_json FROM cloudflare_credentials WHERE id=?").bind(credentialId).first();
+  if (!row) throw new Error("Cloudflare 凭据不存在");
+  const zones = JSON.parse(row.zones_json || "[]");
+  const zone = zones.find(x => x.id === zoneId);
+  if (!zone) throw new Error("所选 Zone 不属于此 Cloudflare 凭据");
+  const token = await decryptSecret(env, row.token_ciphertext);
+  let zoneInfo;
+  try {
+    zoneInfo = await cfRequest(token, "/zones/" + encodeURIComponent(zoneId));
+  } catch (error) {
+    throw new Error("读取 Cloudflare Zone 账户信息失败，请确认 Token 有 Zone Read 权限：" + (error?.message || String(error)));
+  }
+  const accountId = String(zoneInfo?.account?.id || "");
+  if (!accountId) throw new Error("无法从 Cloudflare Zone 获取 Account ID");
+  return { row, zones, zone, token, accountId };
+}
+function tunnelApiPath(accountId, tunnelId = "") {
+  const base = "/accounts/" + encodeURIComponent(accountId) + "/cfd_tunnel";
+  if (!tunnelId) return base;
+  if (!/^[0-9a-f-]{36}$/i.test(String(tunnelId))) throw new Error("Tunnel ID 格式无效");
+  return base + "/" + encodeURIComponent(tunnelId);
+}
+async function tunnelRequest(token, path, method = "GET", body) {
+  try {
+    return await cfRequest(token, path, method, body);
+  } catch (error) {
+    const message = error?.message || String(error);
+    if (/403|forbidden|permission|not authorized|10000/i.test(message)) {
+      throw new Error("Cloudflare Tunnel API 权限不足。请在该 Token 的 Account 权限中增加 Cloudflare Tunnel → Edit（至少需要 Tunnel Read/Write）：" + message);
+    }
+    throw error;
+  }
+}
+async function listAccountTunnels(token, accountId) {
+  const all = [];
+  const base = tunnelApiPath(accountId);
+  for (let page = 1; page <= 20; page++) {
+    const items = await tunnelRequest(token, base + "?is_deleted=false&per_page=100&page=" + page);
+    if (!Array.isArray(items)) throw new Error("Cloudflare 返回的 Tunnel 列表格式异常");
+    all.push(...items);
+    if (items.length < 100) break;
+  }
+  return all;
+}
+function normalizeTunnelService(value) {
+  const service = String(value || "").trim();
+  if (!service || service.length > 512) throw new Error("请填写有效的后端服务地址（最多 512 个字符）");
+  if (/^https?:\/\//i.test(service)) {
+    let url;
+    try { url = new URL(service); } catch { throw new Error("后端服务地址格式无效"); }
+    if (!url.hostname || url.username || url.password) throw new Error("后端服务地址不能包含用户名或密码");
+    return service;
+  }
+  if (/^(ssh|tcp|rdp|smb):\/\/[^\s]+$/i.test(service)) return service;
+  if (/^unix:\/\/.+$/i.test(service)) return service;
+  throw new Error("支持 http://、https://、ssh://、tcp://、rdp://、smb:// 或 unix:// 服务地址");
+}
+function normalizeTunnelHostname(sub, zoneName) {
+  let prefix = String(sub || "").trim().toLowerCase().replace(/\.$/, "");
+  if (prefix === "@" || prefix === zoneName) prefix = "";
+  if (prefix && prefix.endsWith("." + zoneName)) prefix = prefix.slice(0, -(zoneName.length + 1));
+  if (prefix && !/^(?=.{1,200}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/.test(prefix)) {
+    throw new Error("子域名前缀格式无效，只能使用字母、数字、连字符和点");
+  }
+  const hostname = prefix ? prefix + "." + zoneName : zoneName;
+  if (hostname.length > 253) throw new Error("完整域名过长");
+  return hostname;
+}
+async function ensureTunnelCname(token, zoneId, hostname, tunnelId) {
+  const target = tunnelId + ".cfargotunnel.com";
+  const path = "/zones/" + encodeURIComponent(zoneId) + "/dns_records?name=" + encodeURIComponent(hostname) + "&per_page=100";
+  const records = await cfRequest(token, path);
+  const existing = records.find(x => x.type === "CNAME" && String(x.content || "").toLowerCase() === target.toLowerCase());
+  const conflicts = records.filter(x => x.id !== existing?.id);
+  if (conflicts.length) {
+    const detail = conflicts.map(x => x.type + " → " + x.content).join(", ");
+    throw new Error("域名 " + hostname + " 已有其他 DNS 记录：" + detail + "。为避免覆盖，未修改 DNS");
+  }
+  if (existing) return { created: false, recordId: existing.id };
+  const created = await cfRequest(token, "/zones/" + encodeURIComponent(zoneId) + "/dns_records", "POST", {
+    type: "CNAME", name: hostname, content: target, ttl: 1, proxied: true,
+    comment: "Managed by Domain Access Manager · Cloudflare Tunnel"
+  });
+  return { created: true, recordId: created?.id || "" };
+}
+function findTunnelZone(zones, hostname) {
+  return (zones || []).filter(z => hostname === z.name || hostname.endsWith("." + z.name)).sort((a,b) => b.name.length - a.name.length)[0] || null;
+}
+async function cleanupTunnelCnames(token, zones, tunnelId, hostnames) {
+  const target = tunnelId + ".cfargotunnel.com";
+  const removed = [];
+  const warnings = [];
+  for (const hostname of [...new Set(hostnames)].filter(Boolean)) {
+    const zone = findTunnelZone(zones, hostname);
+    if (!zone) { warnings.push("找不到域名所属 Zone：" + hostname); continue; }
+    try {
+      const records = await cfRequest(token, "/zones/" + encodeURIComponent(zone.id) + "/dns_records?type=CNAME&name=" + encodeURIComponent(hostname) + "&per_page=100");
+      for (const record of records) {
+        if (record.type === "CNAME" && String(record.content || "").toLowerCase() === target.toLowerCase()) {
+          await cfRequest(token, "/zones/" + encodeURIComponent(zone.id) + "/dns_records/" + encodeURIComponent(record.id), "DELETE");
+          removed.push(hostname);
+        }
+      }
+    } catch (error) {
+      warnings.push(hostname + "： " + (error?.message || String(error)));
+    }
+  }
+  return { removed, warnings };
+}
+async function getTunnelConfiguration(token, accountId, tunnelId) {
+  const result = await tunnelRequest(token, tunnelApiPath(accountId, tunnelId) + "/configurations");
+  const config = result?.config || {};
+  return { config, ingress: Array.isArray(config.ingress) ? config.ingress.slice() : [] };
+}
+async function putTunnelConfiguration(token, accountId, tunnelId, config, ingress) {
+  let rules = ingress.slice();
+  if (!rules.some(x => !x.hostname && !x.path)) rules.push({ service: "http_status:404" });
+  const lastCatchAll = rules.findIndex(x => !x.hostname && !x.path);
+  if (lastCatchAll !== rules.length - 1) {
+    const catchAll = rules.splice(lastCatchAll, 1)[0];
+    rules.push(catchAll);
+  }
+  await tunnelRequest(token, tunnelApiPath(accountId, tunnelId) + "/configurations", "PUT", {
+    config: { ...config, ingress: rules }
+  });
+  return rules;
+}
+
 function safeName(value) {
   const name = String(value || "").trim();
   if (!name || name.length > 80) throw new Error("名称不能为空且不能超过 80 个字符");
