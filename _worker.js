@@ -907,7 +907,7 @@ const PAGE = `<!doctype html>
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button,input{font:inherit}button{cursor:pointer;border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:9px;padding:9px 13px}button.primary{background:#2767c8;border-color:#3478dc}button.danger{color:#ff9999}input{width:100%;padding:11px 12px;background:#0c1424;border:1px solid var(--line);border-radius:9px;color:var(--text);outline:none}input:focus{border-color:var(--accent)}.wrap{max-width:1120px;margin:auto;padding:28px 22px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}.brand{font-size:19px;font-weight:700}.muted{color:var(--muted)}.tabs{display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap}.tabs button.active{background:#1e3d68;border-color:#477fc8}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:15px}.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px}.card h3{margin:0 0 14px;font-size:16px}.field{margin:12px 0}.field label{display:block;margin-bottom:6px;color:var(--muted);font-size:12px}.actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.dns-toggle{width:42px;height:24px;padding:2px;border-radius:20px;background:#3b4659;border:1px solid #52617a;display:inline-flex;align-items:center;justify-content:flex-start;transition:background .15s,border-color .15s;vertical-align:middle}.dns-toggle span{width:18px;height:18px;background:#e9eef7;border-radius:50%;display:block;transition:transform .15s}.dns-toggle[aria-checked="true"]{background:#e78a20;border-color:#f5a33c}.dns-toggle[aria-checked="true"] span{transform:translateX(18px)}.dns-toggle:disabled{opacity:.5;cursor:not-allowed}.proxy-state{font-size:11px;color:var(--muted)}.proxy-state.on{color:#ffb34d}.item{padding:14px 0;border-top:1px solid var(--line)}.item:first-child{border-top:0}.row{display:flex;justify-content:space-between;gap:12px;align-items:center}.domain-main{min-width:0;flex:1}.domain-main b{overflow-wrap:anywhere}.domain-side{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-shrink:0;white-space:nowrap}.pill{font-size:11px;color:var(--green);background:#16382e;padding:3px 8px;border-radius:20px}.pill.bad{color:#ff9d9d;background:#3a2228}.zone{display:inline-block;border:1px solid var(--line);border-radius:20px;padding:3px 8px;margin:5px 4px 0 0;font-size:11px;color:var(--muted)}.hidden{display:none!important}.notice{padding:10px 12px;border-radius:9px;background:#1a2b43;color:#a9caff;margin:12px 0}.error{background:#3b2027;color:#ffaaaa}.login{max-width:390px;margin:12vh auto;padding:26px}.login h1{margin:0 0 5px}.empty{padding:22px;text-align:center;color:var(--muted)}small{color:var(--muted)}@media(max-width:600px){.wrap{padding:18px 13px}.top{align-items:flex-start}.row{align-items:flex-start}}
 </style></head><body><div id="login" class="card login"><h1>Domain Access Manager</h1><p class="muted">Cloudflare DNS · 1Panel · Reverse Proxy</p><form id="loginForm"><div class="field"><label>管理员密码</label><input name="password" type="password" required autofocus autocomplete="current-password"></div><button class="primary" style="width:100%">登录</button></form><div id="loginMsg"></div></div>
 <div id="app" class="wrap hidden"><header class="top"><div><div class="brand">Domain Access Manager</div><small>Cloudflare DNS & 1Panel 管理</small></div><button id="logout">退出登录</button></header>
-<nav class="tabs"><button data-tab="overview" class="active">概览</button><button data-tab="cloudflare">Cloudflare</button><button data-tab="nodes">VPS / 1Panel</button><button data-tab="dns">DNS 记录</button><button data-tab="publish">域名接入</button><button data-tab="domains">域名管理</button><button data-tab="logs">操作记录</button></nav>
+<nav class="tabs"><button data-tab="overview" class="active">概览</button><button data-tab="cloudflare">Cloudflare</button><button data-tab="nodes">VPS / 1Panel</button><button data-tab="dns">DNS 记录</button><button data-tab="publish">域名接入</button><button data-tab="domains">域名管理</button><button data-tab="tunnels">Tunnel 管理</button><button data-tab="logs">操作记录</button></nav>
 <section id="overview" class="tab grid"><div class="card"><h3>Cloudflare 凭据</h3><div id="countCf">-</div><small>多个 Token，自动发现 Zone</small></div><div class="card"><h3>1Panel 节点</h3><div id="countNodes">-</div><small>多个 VPS，独立 API 凭据</small></div><div class="card"><h3>下一步</h3><p class="muted">先添加 Cloudflare Token 和 1Panel 节点，随后即可建设 DNS → SSL → 反向代理的一键发布流程。</p></div></section>
 <section id="cloudflare" class="tab hidden grid"><div class="card"><h3>添加 Cloudflare 凭据</h3><form id="cfForm"><div class="field"><label>配置名称</label><input name="name" placeholder="例如：个人域名" required></div><div class="field"><label>API Token</label><input name="token" type="password" autocomplete="off" required></div><button class="primary">验证 Token 并自动获取域名</button></form><div id="cfMsg"></div></div><div class="card"><h3>已保存的 Cloudflare 账号</h3><div id="cfList" class="muted">加载中...</div></div></section>
 <section id="nodes" class="tab hidden grid"><div class="card"><h3>添加 1Panel 节点</h3><form id="nodeForm"><div class="field"><label>节点名称</label><input name="name" placeholder="例如：日本 VPS" required></div><div class="field"><label>1Panel 地址（HTTP / HTTPS）</label><input id="nodeBaseUrl" name="baseUrl" placeholder="http://104.233.209.110:32666 或 https://panel.example.com" required></div><div class="field"><label>1Panel API Key</label><input name="apiKey" type="password" autocomplete="off" required></div><button type="submit" class="primary">测试连接并保存</button></form><div id="nodeMsg"></div><div class="notice">支持 HTTP 和 HTTPS，也支持 IP 地址。若 Worker 无法直连 IP，会引导你到 DNS 记录页面创建 DNS-only A 记录，再返回此处使用域名连接。HTTP 不加密 API Key 和请求内容，建议仅临时使用并尽快配置 HTTPS。</div></div><div class="card"><h3>已保存的 VPS 节点</h3><div id="nodeList" class="muted">加载中...</div></div></section>
@@ -936,7 +936,32 @@ const PAGE = `<!doctype html>
 <div class="field"><label><input name="proxied" type="checkbox" style="width:auto"> 开启 Cloudflare 橙色云代理</label></div>
 <button class="primary" id="publishButton">开始一键接入</button>
 </form><div id="publishMsg"></div></div>
-<div class="card"><h3>域名接入任务</h3><button id="refreshPublish">刷新任务</button><div id="publishList" style="margin-top:12px">加载中...</div></div></section><section id="domains" class="tab hidden"><div class="card"><h3>已接入域名</h3><p class="muted">统一管理通过本工具接入的域名。删除会清理本工具创建的网站、证书和 DNS 记录；共享账户及原本已存在的 DNS 记录会保留。</p><div class="actions"><button id="refreshDomains">刷新列表</button></div><div id="domainList" style="margin-top:12px">加载中...</div><div id="domainMsg"></div></div></section><section id="logs" class="tab hidden"><div class="card"><h3>最近操作</h3><div id="logList">加载中...</div></div></section></div>
+<div class="card"><h3>域名接入任务</h3><button id="refreshPublish">刷新任务</button><div id="publishList" style="margin-top:12px">加载中...</div></div></section><section id="domains" class="tab hidden"><div class="card"><h3>已接入域名</h3><p class="muted">统一管理通过本工具接入的域名。删除会清理本工具创建的网站、证书和 DNS 记录；共享账户及原本已存在的 DNS 记录会保留。</p><div class="actions"><button id="refreshDomains">刷新列表</button></div><div id="domainList" style="margin-top:12px">加载中...</div><div id="domainMsg"></div></div></section><section id="tunnels" class="tab hidden grid">
+<div class="card">
+<h3>Cloudflare Tunnel</h3>
+<p class="muted">复用已保存的 Cloudflare 凭据。创建 Tunnel 时自动配置入口规则和 CNAME；不会修改已有冲突 DNS 记录。</p>
+<div class="field"><label>Cloudflare 凭据</label><select id="tunnelCredential" style="width:100%;padding:10px;background:#0c1424;color:var(--text);border:1px solid var(--line);border-radius:9px"></select></div>
+<div class="field"><label>域名 Zone</label><select id="tunnelZone" style="width:100%;padding:10px;background:#0c1424;color:var(--text);border:1px solid var(--line);border-radius:9px"></select></div>
+<button id="refreshTunnels" class="primary">刷新 Tunnel 列表</button>
+<div id="tunnelMsg"></div>
+<div id="tunnelList" style="margin-top:12px">请选择 Cloudflare 凭据和 Zone</div>
+</div>
+<div class="card">
+<h3>新建 Tunnel</h3>
+<form id="tunnelForm">
+<div class="field"><label>隧道名称</label><input name="name" placeholder="例如：us-vps-main" required></div>
+<div class="field"><label>子域名前缀</label><input name="sub" placeholder="例如：app（将创建 app.example.com）" required></div>
+<div class="field"><label>入口路径（可选）</label><input name="path" placeholder="/api 或留空"></div>
+<div class="field"><label>后端服务地址</label><input name="service" placeholder="http://localhost:3000" required></div>
+<button class="primary" id="createTunnelButton">创建 Tunnel</button>
+</form>
+<div class="notice">创建后请在运行服务的 VPS 上安装并启动 cloudflared 连接器。Tunnel 令牌可在列表中查看。Token 相当于隧道控制凭据，请勿公开。</div>
+</div>
+<div class="card" style="grid-column:1/-1">
+<h3 id="tunnelDetailTitle">Tunnel 详情与入口规则</h3>
+<div id="tunnelDetail" class="muted">从列表选择一个 Tunnel 查看配置。</div>
+</div>
+</section><section id="logs" class="tab hidden"><div class="card"><h3>最近操作</h3><div id="logList">加载中...</div></div></section></div>
 <script>
 const $=s=>document.querySelector(s);const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 async function api(path,opts={}){const r=await fetch(path,{...opts,headers:{"content-type":"application/json",...(opts.headers||{})}});const d=await r.json().catch(()=>({error:"服务器响应无法解析"}));if(r.status===401){showLogin();throw new Error(d.error||"登录已过期")}if(!r.ok)throw new Error(d.error||"请求失败");return d}
@@ -944,7 +969,7 @@ function msg(el,text,bad=false){el.innerHTML='<div class="notice '+(bad?'error':
 function showLogin(){$("#login").classList.remove("hidden");$("#app").classList.add("hidden")}
 function showApp(){$("#login").classList.add("hidden");$("#app").classList.remove("hidden");refresh()}
 async function refresh(){await Promise.all([loadCf(),loadNodes(),loadLogs()]);try{await loadDnsCredentials();await loadPublishOptions();await loadPublishList();await loadDomains()}catch(e){}}
-document.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{document.querySelectorAll("[data-tab]").forEach(x=>x.classList.toggle("active",x===b));document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("hidden",x.id!==b.dataset.tab))});
+document.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{document.querySelectorAll("[data-tab]").forEach(x=>x.classList.toggle("active",x===b));document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("hidden",x.id!==b.dataset.tab));if(b.dataset.tab==="tunnels")initTunnelPage()});
 $("#loginForm").onsubmit=async e=>{e.preventDefault();const p=new FormData(e.target).get("password");try{await api("/api/login",{method:"POST",body:JSON.stringify({password:p})});e.target.reset();$("#loginMsg").innerHTML="";showApp()}catch(err){msg($("#loginMsg"),err.message,true)}};
 $("#logout").onclick=async()=>{await api("/api/logout",{method:"POST",body:"{}"});showLogin()};
 $("#cfForm").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);const b=e.target.querySelector("button");b.disabled=true;b.textContent="验证中...";try{const d=await api("/api/cloudflare/verify",{method:"POST",body:JSON.stringify({name:f.get("name"),token:f.get("token")})});e.target.reset();msg($("#cfMsg"),"验证成功，发现 "+d.item.zoneCount+" 个域名");await loadCf();await loadPublishOptions()}catch(err){msg($("#cfMsg"),err.message,true)}finally{b.disabled=false;b.textContent="验证 Token 并自动获取域名"}};
@@ -1060,6 +1085,80 @@ $("#publishForm").onsubmit=async e=>{
  finally{b.disabled=false;b.textContent="开始一键接入"}
 };
 $("#refreshPublish").onclick=loadPublishList;
+let activeTunnelId="";
+function updateTunnelZones(){
+ const cred=$("#tunnelCredential").value;
+ const item=(window.__cfItems||[]).find(x=>x.id===cred);
+ $("#tunnelZone").innerHTML=(item?.zones||[]).map(z=>'<option value="'+esc(z.id)+'">'+esc(z.name)+'</option>').join("");
+}
+async function loadTunnelList(){
+ try{
+  const credentialId=$("#tunnelCredential").value,zoneId=$("#tunnelZone").value;
+  if(!credentialId||!zoneId){$("#tunnelList").innerHTML='<div class="empty">请选择 Cloudflare 凭据和 Zone</div>';return}
+  const d=await api("/api/tunnels?credentialId="+encodeURIComponent(credentialId)+"&zoneId="+encodeURIComponent(zoneId));
+  $("#tunnelList").innerHTML=d.items.length?d.items.map(t=>'<div class="item"><div class="row"><div class="domain-main"><b>'+esc(t.name)+'</b><div><small>'+esc(t.id)+'</small></div></div><div class="domain-side"><span class="pill '+(t.status==="healthy"?"":t.status==="down"||t.status==="inactive"?"bad":"")+'">'+esc(t.status||"unknown")+'</span><button data-tunnel-detail="'+esc(t.id)+'">详情</button><button data-tunnel-token="'+esc(t.id)+'">Token</button><button data-tunnel-rename="'+esc(t.id)+'">重命名</button><button class="danger" data-tunnel-delete="'+esc(t.id)+'">删除</button></div></div></div>').join(""):'<div class="empty">当前账号和 Zone 暂无 Tunnel</div>';
+  document.querySelectorAll("[data-tunnel-detail]").forEach(b=>b.onclick=()=>loadTunnelDetail(b.dataset.tunnelDetail));
+  document.querySelectorAll("[data-tunnel-token]").forEach(b=>b.onclick=()=>showTunnelToken(b.dataset.tunnelToken));
+  document.querySelectorAll("[data-tunnel-rename]").forEach(b=>b.onclick=()=>renameTunnel(b.dataset.tunnelRename));
+  document.querySelectorAll("[data-tunnel-delete]").forEach(b=>b.onclick=()=>deleteTunnel(b.dataset.tunnelDelete));
+ }catch(e){msg($("#tunnelMsg"),e.message,true);$("#tunnelList").innerHTML='<div class="empty">加载失败</div>'}
+}
+function tunnelQuery(id,tail=""){return "/api/tunnels/"+encodeURIComponent(id)+(tail?"/"+tail:"")+"?credentialId="+encodeURIComponent($("#tunnelCredential").value)+"&zoneId="+encodeURIComponent($("#tunnelZone").value)}
+async function loadTunnelDetail(id){
+ try{
+  activeTunnelId=id;
+  const d=await api(tunnelQuery(id,"detail"));
+  const rules=d.ingress.filter(x=>x.hostname);
+  $("#tunnelDetailTitle").textContent="Tunnel 详情："+d.item.name;
+  $("#tunnelDetail").innerHTML=rules.length?rules.map(r=>'<div class="item"><div class="row"><div class="domain-main"><b>'+esc(r.hostname)+'</b><div><small>'+esc(r.path||"/")+" → "+esc(r.service)+'</small></div></div><button class="danger" data-route-delete="'+esc(r.hostname)+'" data-route-path="'+esc(r.path||"")+'">删除规则</button></div></div>').join(""):'<div class="empty">当前 Tunnel 尚未配置域名入口</div>';
+  $("#tunnelDetail").innerHTML+='<form id="tunnelRouteForm" class="grid" style="margin-top:12px"><div class="field"><label>子域名前缀</label><input name="sub" placeholder="例如 api" required></div><div class="field"><label>路径（可选）</label><input name="path" placeholder="/api"></div><div class="field"><label>后端服务地址</label><input name="service" placeholder="http://localhost:3000" required></div><button class="primary">添加入口规则</button></form>';
+  document.querySelectorAll("[data-route-delete]").forEach(b=>b.onclick=()=>mutateTunnelRoute("delete",{hostname:b.dataset.routeDelete,path:b.dataset.routePath}));
+  $("#tunnelRouteForm").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);await mutateTunnelRoute("add",{sub:f.get("sub"),path:f.get("path"),service:f.get("service")})};
+ }catch(e){msg($("#tunnelMsg"),e.message,true)}
+}
+async function mutateTunnelRoute(action,data){
+ try{
+  await api(tunnelQuery(activeTunnelId,"routes"),{method:"POST",body:JSON.stringify({action,...data})});
+  msg($("#tunnelMsg"),action==="add"?"入口规则已添加":"入口规则已删除");
+  await loadTunnelDetail(activeTunnelId);await loadTunnelList();
+ }catch(e){msg($("#tunnelMsg"),e.message,true)}
+}
+async function showTunnelToken(id){
+ try{
+  const d=await api(tunnelQuery(id,"token"));
+  const token=typeof d.token==="string"?d.token:JSON.stringify(d.token);
+  const value=prompt("Tunnel Token（请妥善保管，不要公开）：",token);
+  if(value!==null)await navigator.clipboard?.writeText(value).catch(()=>{});
+ }catch(e){msg($("#tunnelMsg"),e.message,true)}
+}
+async function renameTunnel(id){
+ const name=prompt("输入新的 Tunnel 名称：");if(!name)return;
+ try{await api(tunnelQuery(id),{method:"PATCH",body:JSON.stringify({name})});msg($("#tunnelMsg"),"Tunnel 名称已更新");await loadTunnelList()}catch(e){msg($("#tunnelMsg"),e.message,true)}
+}
+async function deleteTunnel(id){
+ if(!confirm("确定删除这个 Cloudflare Tunnel？将删除 Tunnel 本身及其指向该 Tunnel 的 CNAME 记录。活动连接器必须先在 VPS 上停止。"))return;
+ try{const d=await api(tunnelQuery(id),{method:"DELETE",body:"{}"});msg($("#tunnelMsg"),d.cleanup?.warnings?.length?"Tunnel 已删除，但 DNS 清理有警告："+d.cleanup.warnings.join("；"):"Tunnel 和关联 CNAME 已删除");if(activeTunnelId===id){activeTunnelId="";$("#tunnelDetail").textContent="从列表选择一个 Tunnel 查看配置。"}await loadTunnelList()}catch(e){msg($("#tunnelMsg"),e.message,true)}
+}
+async function initTunnelPage(){
+ try{
+  const d=await api("/api/cloudflare");window.__cfItems=d.items;
+  $("#tunnelCredential").innerHTML=d.items.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.name)+'</option>').join("");
+  updateTunnelZones();
+  $("#tunnelCredential").onchange=()=>{updateTunnelZones();loadTunnelList()};
+  $("#tunnelZone").onchange=loadTunnelList;
+  await loadTunnelList();
+ }catch(e){msg($("#tunnelMsg"),e.message,true)}
+}
+$("#refreshTunnels").onclick=loadTunnelList;
+$("#tunnelForm").onsubmit=async e=>{
+ e.preventDefault();const f=new FormData(e.target);const b=$("#createTunnelButton");b.disabled=true;b.textContent="正在创建...";
+ try{
+  const d=await api("/api/tunnels",{method:"POST",body:JSON.stringify({credentialId:$("#tunnelCredential").value,zoneId:$("#tunnelZone").value,name:f.get("name"),sub:f.get("sub"),path:f.get("path"),service:f.get("service")})});
+  msg($("#tunnelMsg"),"Tunnel 已创建："+d.item.hostname+"；请在 VPS 上启动 cloudflared 连接器");
+  e.target.reset();await loadTunnelList();
+ }catch(err){msg($("#tunnelMsg"),err.message,true)}
+ finally{b.disabled=false;b.textContent="创建 Tunnel"}
+};
 async function loadLogs(){try{const d=await api("/api/logs");$("#logList").innerHTML=d.items.length?d.items.map(x=>'<div class="item"><div class="row"><b>'+esc(x.operation)+'</b><span class="pill '+(x.status==="success"?"":"bad")+'">'+esc(x.status)+'</span></div><small>'+esc(x.created_at)+' · '+esc(x.message)+'</small></div>').join(""):'<div class="empty">暂无操作记录</div>'}catch(e){$("#logList").textContent=e.message}}
 api("/api/me").then(showApp).catch(showLogin);
 </script></body></html>`;
