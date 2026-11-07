@@ -71,7 +71,7 @@ Open the Worker URL and sign in with the `PASSWORD` secret.
 ## Deploy from Cloudflare Dashboard
 
 1. Create a D1 database named `domain-access-manager`.
-2. Open the D1 console and execute [schema/0001_init.sql and then schema/0002_publish_workflow.sql](schema/0001_init.sql).
+2. Open the D1 console and execute `schema/0001_init.sql`, `schema/0002_publish_workflow.sql`, then `schema/0003_account_api_tokens.sql` in order.
 3. Create a Worker named `domain-access-manager`.
 4. Paste the complete contents of `_worker.js` into the Worker's editor.
 5. Under **Settings → Bindings**, add the D1 database binding named `DOMAIN_DB`.
@@ -95,11 +95,14 @@ Headers:
 
 ## Cloudflare Token permissions
 
-Create narrowly scoped API tokens. The application needs:
-- Zone → Read, to list accessible zones.
-- DNS → Read and DNS → Edit, to list, create and inspect DNS records.
+Create an **Account API Token** under Manage Account → API Tokens. The application stores the Account ID (32 hexadecimal characters) with the token and verifies it through `GET /accounts/{account_id}/tokens/verify`. User API Tokens are not supported.
 
-The application verifies the token and displays the zones it can access. It does not ask users to type Zone names or IDs manually.
+The application needs:
+- Account → Cloudflare Tunnel → Read and Edit, to list, create, update, inspect and delete tunnels.
+- Zone → Read, to discover zones and verify their owning Account ID.
+- Zone → DNS → Read and Edit, to list, create, update and remove DNS records.
+
+The application verifies the token against the supplied Account ID, then lists only zones belonging to that account. Existing legacy credential rows remain in D1 but have no Account ID; edit/update them with an Account API Token before using them. Updating a credential preserves managed-site references and the existing 1Panel DNS/ACME mapping rows.
 
 ## One-click publishing workflow
 
@@ -130,3 +133,14 @@ npm run check
 ## License
 
 MIT
+
+
+## Upgrade existing D1 database for Account API Tokens
+
+After deploying the Account API Token version, run this migration exactly once:
+
+```bash
+npm run db:account-token-migration
+```
+
+Or execute `schema/0003_account_api_tokens.sql` in the D1 console. Do not rerun it after the `account_id` column has been added. Then open Cloudflare credentials, choose **Update** on each legacy credential, enter the 32-character Account ID and the new Account API Token, and verify/save. This updates the existing credential row so managed domains and 1Panel mappings keep their references.
